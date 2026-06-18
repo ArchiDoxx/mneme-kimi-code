@@ -446,7 +446,8 @@ def update(do_upgrade: bool) -> None:
         ("Database", _init_database),
         ("Configuration", _create_default_config),
         ("Hooks", _register_hooks),
-        ("Plugin", _install_plugin),
+        ("MCP Server", _register_mcp),
+        ("Skills", _install_skills),
     ]
 
     for name, step in steps:
@@ -468,6 +469,54 @@ def init() -> None:
     config = load_config()
     init_db(config["db"]["path"])
     click.echo(" Database initialized")
+
+
+@main.command()
+@click.option("--days", default=0, help="Only sessions modified in the last N days (0 = all)")
+def reindex(days: int) -> None:
+    """Backfill the memory database from existing Kimi Code CLI sessions.
+
+    The live watcher only ingests sessions that change while it runs, so this
+    rebuilds history after an install/upgrade. Reads every wire.jsonl under
+    ~/.kimi-code/sessions/<wd>/<session>/agents/<agent>/ and resolves the real
+    session id + working directory from session_index.jsonl.
+
+    Run on a fresh database (`mneme reset --force`) to avoid duplicate rows.
+    """
+    import time as _time
+
+    from mneme.wire.indexer import WireIndexer
+    from mneme.wire.reader import SessionReader, iter_session_wires, load_workdir_map
+
+    sessions_dir = get_kimi_dir() / "sessions"
+    if not sessions_dir.exists():
+        click.echo(f" No sessions directory at {sessions_dir}")
+        return
+
+    workdir_map = load_workdir_map(get_kimi_dir())
+    indexer = WireIndexer()
+    cutoff = (_time.time() - days * 86400) if days else 0.0
+
+    sessions = events = skipped = 0
+    for identity in iter_session_wires(sessions_dir, workdir_map):
+        try:
+            if cutoff and identity.wire_path.stat().st_mtime < cutoff:
+                skipped += 1
+                continue
+        except OSError:
+            pass
+        indexer.store.ensure_session(identity.session_id, identity.cwd)
+        reader = SessionReader(
+            identity.session_dir, identity.session_id, wire_path=identity.wire_path
+        )
+        counts = indexer.index_events(reader.read_new_events())
+        indexer.index_state(reader.read_state())
+        n = sum(counts.values())
+        events += n
+        sessions += 1
+        click.echo(f"  {identity.session_id[:40]}: {n} events (cwd={identity.cwd or '?'})")
+
+    click.echo(f"\n Reindexed {sessions} sessions, {events} events ({skipped} skipped).")
 
 
 @main.command()
@@ -824,20 +873,24 @@ def _register_hooks() -> bool:
     except Exception:
         pass
 
-    # Prefer uv tool python if available (has mneme installed), fallback to current
+    # Prefer the persistent installed mneme python (has mneme installed and
+    # survives uvx cache purges) over an ephemeral sys.executable.
     python_exe = sys.executable
-    uv_tool_python = (
+    uv_tool_candidates = [
         Path.home()
         / "AppData"
         / "Roaming"
         / "uv"
         / "tools"
-        / "kimi-mneme"
+        / "mneme-kimi-code"
         / "Scripts"
-        / "python.exe"
-    )
-    if uv_tool_python.exists():
-        python_exe = str(uv_tool_python)
+        / "python.exe",
+        Path.home() / ".local" / "share" / "uv" / "tools" / "mneme-kimi-code" / "bin" / "python",
+    ]
+    for candidate in uv_tool_candidates:
+        if candidate.exists():
+            python_exe = str(candidate)
+            break
 
     hook_entries = []
     for event, script in hooks:
@@ -848,9 +901,9 @@ def _register_hooks() -> bool:
         hook_entries.append(f"[[hooks]]\nevent = \"{event}\"\ncommand = '{cmd}'\n")
 
     hook_block = (
-        "\n# === kimi-mneme hooks ===\n"
+        "\n# === mneme-kimi-code hooks ===\n"
         + "\n".join(hook_entries)
-        + "# === end kimi-mneme hooks ===\n"
+        + "# === end mneme-kimi-code hooks ===\n"
     )
 
     try:
@@ -861,14 +914,15 @@ def _register_hooks() -> bool:
             backup_path = get_kimi_dir() / "config.toml.backup"
             shutil.copy2(kimi_config, backup_path)
 
-            # Remove existing kimi-mneme hook block
-            if "kimi-mneme hooks" in content:
-                click.echo("Hooks already registered, updating...")
-                start = content.find("# === kimi-mneme hooks ===")
-                end = content.find("# === end kimi-mneme hooks ===") + len(
-                    "# === end kimi-mneme hooks ==="
-                )
-                content = content[:start] + content[end:]
+            # Remove any existing mneme hook block (current or legacy name).
+            for label in ("mneme-kimi-code", "kimi-mneme"):
+                begin = f"# === {label} hooks ==="
+                end_marker = f"# === end {label} hooks ==="
+                if begin in content and end_marker in content:
+                    click.echo("Hooks already registered, updating...")
+                    start = content.find(begin)
+                    end = content.find(end_marker) + len(end_marker)
+                    content = content[:start] + content[end:]
 
             # Remove bare `hooks = []` which conflicts with [[hooks]] tables
             import re
@@ -1043,6 +1097,8 @@ def _register_mcp() -> bool:
         if "mcpServers" not in data:
             data["mcpServers"] = {}
 
+        # Drop the legacy key from older installs to avoid duplicate servers.
+        data["mcpServers"].pop("kimi-mneme", None)
         data["mcpServers"]["mneme-kimi-code"] = mcp_entry["mneme-kimi-code"]
 
         with open(mcp_config, "w", encoding="utf-8") as f:
@@ -1340,8 +1396,13 @@ def _interactive_sql_shell(conn: sqlite3.Connection) -> None:
 
 @main.command()
 @click.option("--no-server", is_flag=True, help="Don't start web server")
-@click.option("--no-plugin", is_flag=True, help="Don't install plugin")
-def bootstrap(no_server: bool, no_plugin: bool) -> None:
+@click.option(
+    "--with-plugin",
+    is_flag=True,
+    help="Also run the legacy `kimi plugin install` (not supported on Kimi Code CLI)",
+)
+@click.option("--no-plugin", is_flag=True, help="Deprecated: plugin install is off by default")
+def bootstrap(no_server: bool, with_plugin: bool, no_plugin: bool) -> None:
     """One-shot setup for kimi-mneme.
 
     Registers hooks, installs plugin, initializes database, and starts web server.
@@ -1360,7 +1421,10 @@ def bootstrap(no_server: bool, no_plugin: bool) -> None:
         ("Hooks", _register_hooks),
     ]
 
-    if not no_plugin:
+    # The npm Kimi Code CLI has no `kimi plugin install`; the plugin step is a
+    # no-op there, so it is opt-in via --with-plugin. Integration runs via the
+    # hooks (above) and the MCP server (below).
+    if with_plugin:
         steps.append(("Plugin", _install_plugin))
 
     steps.append(("MCP Server", _register_mcp))

@@ -60,7 +60,7 @@ mneme bootstrap
 # git clone https://github.com/barrelc/kimi-mneme.git
 
 # Dieser Fork:
-git clone https://github.com/DEIN_USERNAME/mneme-kimi-code.git
+git clone https://github.com/ArchiDoxx/mneme-kimi-code.git
 cd mneme-kimi-code
 pip install -e .
 mneme bootstrap

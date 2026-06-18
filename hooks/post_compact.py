@@ -31,7 +31,7 @@ def main() -> None:
         sys.exit(0)
 
     except Exception as e:
-        print(f"kimi-mneme hook error: {e}", file=sys.stderr)
+        print(f"mneme-kimi-code hook error: {e}", file=sys.stderr)
         sys.exit(0)
 
 
