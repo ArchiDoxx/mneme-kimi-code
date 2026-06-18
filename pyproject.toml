@@ -62,13 +62,25 @@ dev = [
 mneme = "mneme.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/DEIN_USERNAME/mneme-kimi-code"
-Documentation = "https://github.com/DEIN_USERNAME/mneme-kimi-code#readme"
-Repository = "https://github.com/DEIN_USERNAME/mneme-kimi-code"
-Issues = "https://github.com/DEIN_USERNAME/mneme-kimi-code/issues"
+Homepage = "https://github.com/ArchiDoxx/mneme-kimi-code"
+Documentation = "https://github.com/ArchiDoxx/mneme-kimi-code#readme"
+Repository = "https://github.com/ArchiDoxx/mneme-kimi-code"
+Issues = "https://github.com/ArchiDoxx/mneme-kimi-code/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["mneme", "plugin"]
+# hooks/ and skills/ are not Python packages but must ship in the wheel:
+# `mneme bootstrap` copies the hook scripts into ~/.kimi-code/mneme/hooks/ and
+# the skill into ~/.kimi-code/skills/. Without this, PyPI installs (pip/uv/uvx)
+# register hook paths that point at non-existent files.
+exclude = ["**/__pycache__", "**/*.pyc"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"hooks" = "hooks"
+"skills" = "skills"
+
+[tool.hatch.build.targets.sdist]
+include = ["mneme", "plugin", "hooks", "skills", "scripts", "tests", "docs", "README.md", "LICENSE", "pyproject.toml"]
 
 [tool.black]
 line-length = 100

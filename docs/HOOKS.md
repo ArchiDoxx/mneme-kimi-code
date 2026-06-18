@@ -1,278 +1,94 @@
 # Hooks Reference
 
-kimi-mneme uses Kimi CLI's [Hooks system](https://moonshotai.github.io/kimi-cli/en/customization/hooks.md) to capture session data automatically.
+mneme-kimi-code uses Kimi Code CLI's [Hooks system](https://moonshotai.github.io/kimi-cli/) to
+react to session lifecycle events. **Tool calls and user prompts are *not* captured via hooks** —
+they are indexed directly from the session trace (`wire.jsonl`) by the wire watcher, which the
+SessionStart hook starts. This keeps the hook surface small and avoids per-tool overhead.
 
 ## Registered Hooks
 
-Add these to `~/.kimi-code/config.toml`:
+`mneme bootstrap` registers exactly **four** hooks in `~/.kimi-code/config.toml`. The hook commands
+point at copies of the scripts under `~/.kimi-code/mneme/hooks/` (so they survive uvx cache purges),
+using the Python interpreter that has `mneme` installed:
 
 ```toml
-# Session lifecycle
+# === mneme-kimi-code hooks ===
 [[hooks]]
 event = "SessionStart"
-command = "python3 /path/to/kimi-mneme/hooks/session_start.py"
+command = '"/path/to/python" "~/.kimi-code/mneme/hooks/session_start.py"'
 
 [[hooks]]
 event = "SessionEnd"
-command = "python3 /path/to/kimi-mneme/hooks/session_end.py"
-
-# Tool usage
-[[hooks]]
-event = "PostToolUse"
-command = "python3 /path/to/kimi-mneme/hooks/post_tool_use.py"
+command = '"/path/to/python" "~/.kimi-code/mneme/hooks/session_end.py"'
 
 [[hooks]]
-event = "PostToolUseFailure"
-command = "python3 /path/to/kimi-mneme/hooks/post_tool_use_failure.py"
+event = "PreCompact"
+command = '"/path/to/python" "~/.kimi-code/mneme/hooks/pre_compact.py"'
 
-# User interaction
 [[hooks]]
-event = "UserPromptSubmit"
-command = "python3 /path/to/kimi-mneme/hooks/user_prompt_submit.py"
+event = "PostCompact"
+command = '"/path/to/python" "~/.kimi-code/mneme/hooks/post_compact.py"'
+# === end mneme-kimi-code hooks ===
 ```
+
+Hooks receive their event payload as JSON on **stdin** (field `hook_event_name`, plus
+`session_id`, `cwd`, …) and are fire-and-forget (they exit 0 even on error so they never block
+the CLI).
 
 ## Hook Details
 
 ### SessionStart
 
-**Trigger**: When a new session is created or resumed.
+**Trigger**: a new session is created or resumed.
 
-**Input**:
-```json
-{
-  "hook_event_name": "SessionStart",
-  "session_id": "sess_abc123",
-  "cwd": "/home/user/project",
-  "source": "startup"
-}
-```
-
-**Action**:
-- Create session record in database
-- Check for previous checkpoints (if session was resumed after compaction)
-- Query cross-session patterns for current project
-- Query relevant past context
-- Inject context into session (via stdout)
-
-**Output** (stdout):
-```json
-{
-  "hookSpecificOutput": {
-    "context": "## 📌 Session Resume Context\n**Checkpoint #2** (compaction)\n...\n\n## 🔁 Recurring Patterns\n❌ Recurring error in Shell (3×)\n...\n\n## Previous Context\n..."
-  }
-}
-```
-
----
+**Actions**:
+- Start the mneme web server (if not already running) and the **wire watcher**, which tails
+  `~/.kimi-code/sessions/<wd>/<session>/agents/<agent>/wire.jsonl` and indexes tool calls,
+  results, prompts and thinking in real time.
+- Create the session record, check for checkpoints (resumed-after-compaction), query
+  cross-session patterns and relevant past context, and inject it into the session via stdout.
 
 ### SessionEnd
 
-**Trigger**: When session is closed.
+**Trigger**: a session is closed.
 
-**Input**:
-```json
-{
-  "hook_event_name": "SessionEnd",
-  "session_id": "sess_abc123",
-  "cwd": "/home/user/project",
-  "reason": "user_exit"
-}
-```
+**Actions**:
+- Mark the session complete, trigger compression / session-summary generation, detect
+  cross-session patterns, and stop the web server.
 
-**Action**:
-- Mark session as complete
-- Trigger compression of observations
-- Generate session summary
-- Detect and store cross-session patterns (errors, fixes)
+### PreCompact
 
----
+**Trigger**: just before Kimi Code CLI compacts context.
 
-### PostToolUse
+**Actions**:
+- Record the token count before compaction (for the compaction event log).
 
-**Trigger**: After successful tool execution.
+### PostCompact
 
-**Input**:
-```json
-{
-  "hook_event_name": "PostToolUse",
-  "session_id": "sess_abc123",
-  "cwd": "/home/user/project",
-  "tool_name": "WriteFile",
-  "tool_input": {
-    "path": "/project/src/auth.ts",
-    "content": "..."
-  },
-  "tool_output": "File written successfully",
-  "tool_call_id": "call_123"
-}
-```
+**Trigger**: after Kimi Code CLI compacts context.
 
-**Action**:
-- Extract and sanitize observation
-- Detect truncation (output > 100K chars)
-- Store in database
-- Record truncation metadata if applicable
-- Update vector index (async)
+**Actions**:
+- Record the compaction result (tokens before/after), extract key decisions and open tasks,
+  and create a **session checkpoint** that is injected on the next SessionStart. This is what
+  lets a session survive context compaction.
 
----
+## Where tool/prompt data comes from
 
-### PostToolUseFailure
+The npm Kimi Code CLI writes a flat, dot-notation wire format to `wire.jsonl`, e.g.
+`turn.prompt`, `context.append_loop_event` (wrapping `tool.call` / `tool.result` /
+`content.part` / `step.begin` / `step.end`), `usage.record` and `full_compaction.*`.
+The wire watcher parses these (`mneme/wire/parser.py`) into observations — so there is no need
+for `PostToolUse`, `PostToolUseFailure` or `UserPromptSubmit` hooks.
 
-**Trigger**: After failed tool execution.
+To backfill history (the live watcher only sees sessions that change while it runs), use:
 
-**Input**:
-```json
-{
-  "hook_event_name": "PostToolUseFailure",
-  "session_id": "sess_abc123",
-  "cwd": "/home/user/project",
-  "tool_name": "Shell",
-  "tool_input": {
-    "command": "npm test"
-  },
-  "error": "Error: 3 tests failed",
-  "tool_call_id": "call_124"
-}
-```
-
-**Action**:
-- Store error observation (flagged as failure)
-- These are weighted higher in search (learning from mistakes)
-- Contributes to pattern detection (error patterns)
-
----
-
-### UserPromptSubmit
-
-**Trigger**: Before user input is processed.
-
-**Input**:
-```json
-{
-  "hook_event_name": "UserPromptSubmit",
-  "session_id": "sess_abc123",
-  "cwd": "/home/user/project",
-  "prompt": "Fix the auth bug we had yesterday"
-}
-```
-
-**Action**:
-- Store user prompt
-- Extract intent/keywords for better search
-- Contributes to checkpoint open tasks detection
-
----
-
-## Optional Hooks
-
-These provide additional data but are not required:
-
-```toml
-# Subagent tracking
-[[hooks]]
-event = "SubagentStart"
-command = "python3 /path/to/kimi-mneme/hooks/subagent_start.py"
-
-[[hooks]]
-event = "SubagentStop"
-command = "python3 /path/to/kimi-mneme/hooks/subagent_stop.py"
-
-# Compaction tracking (HIGHLY RECOMMENDED for context recovery)
-[[hooks]]
-event = "PreCompact"
-command = "python3 /path/to/kimi-mneme/hooks/pre_compact.py"
-
-[[hooks]]
-event = "PostCompact"
-command = "python3 /path/to/kimi-mneme/hooks/post_compact.py"
-
-# Error tracking
-[[hooks]]
-event = "StopFailure"
-command = "python3 /path/to/kimi-mneme/hooks/stop_failure.py"
-```
-
-### PostCompact (Context Compaction Recovery)
-
-**Trigger**: After Kimi CLI compacts context mid-session.
-
-**Input**:
-```json
-{
-  "hook_event_name": "PostCompact",
-  "session_id": "sess_abc123",
-  "trigger": "token_threshold",
-  "estimated_token_count": 2000,
-  "previous_token_count": 5000
-}
-```
-
-**Action**:
-- Record compaction event (tokens_before, tokens_after)
-- Extract key decisions from recent observations
-- Extract open tasks from user prompts
-- Create session checkpoint with summary
-- **This enables session resume after compaction**
-
-**Why this matters**: Without this hook, when Kimi CLI compacts context, your session loses all mid-session context. With mneme's PostCompact hook, a checkpoint is created that gets injected on the next SessionStart.
-
----
-
-## Hook Implementation Pattern
-
-Each hook follows this pattern:
-
-```python
-#!/usr/bin/env python3
-"""Hook script template."""
-
-import json
-import sys
-from pathlib import Path
-
-# Add project to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from mneme.core.extractor import Extractor
-
-
-def main():
-    # Read input from stdin
-    input_data = json.load(sys.stdin)
-    
-    extractor = Extractor()
-    
-    # Route to appropriate handler
-    event = input_data.get("hook_event_name", "")
-    
-    if event == "SessionStart":
-        result = extractor.handle_session_start(input_data)
-        if result:
-            print(result)
-    elif event == "SessionEnd":
-        extractor.handle_session_end(input_data)
-    elif event == "PostToolUse":
-        extractor.handle_post_tool_use(input_data)
-    elif event == "PostToolUseFailure":
-        extractor.handle_post_tool_use_failure(input_data)
-    elif event == "UserPromptSubmit":
-        extractor.handle_user_prompt_submit(input_data)
-    elif event == "PostCompact":
-        extractor.handle_compaction_event(input_data)
-    
-    # Exit 0 = allow (hooks are fire-and-forget)
-    sys.exit(0)
-
-
-if __name__ == "__main__":
-    main()
+```bash
+mneme reindex            # all sessions
+mneme reindex --days 7   # only sessions touched in the last 7 days
 ```
 
 ## Performance Notes
 
-- All hooks run **fire-and-forget** (async, non-blocking)
-- Database writes are batched where possible
-- Vector indexing happens in background thread
-- Pattern detection runs asynchronously on SessionEnd
-- Hook timeout: 30 seconds (fail-open)
-- Checkpoint creation: < 50ms
+- Hooks run **fire-and-forget** and fail open (exit 0).
+- The wire watcher indexes incrementally (byte offset per file) on the filesystem-watch thread.
+- Checkpoint creation on PostCompact is lightweight.

@@ -25,7 +25,13 @@ else:
     from watchdog.observers.polling import PollingObserver as PlatformObserver
 
 from mneme.wire.indexer import WireIndexer
-from mneme.wire.reader import SessionReader
+from mneme.wire.reader import (
+    SessionIdentity,
+    SessionReader,
+    iter_session_wires,
+    load_workdir_map,
+    resolve_session_identity,
+)
 
 
 class _WireEventHandler(FileSystemEventHandler):
@@ -39,16 +45,14 @@ class _WireEventHandler(FileSystemEventHandler):
             return
         path = Path(event.src_path)
         if path.name == "wire.jsonl":
-            self.watcher._on_wire_changed(path.parent)
+            self.watcher._on_wire_changed(path)
         elif path.name == "state.json":
             self.watcher._on_state_changed(path.parent)
 
     def on_created(self, event: FileSystemEvent) -> None:
+        # Directory creation is covered by the recursive observer; the
+        # wire.jsonl / state.json file events do the actual work.
         if event.is_directory:
-            # New session directory — scan it
-            path = Path(event.src_path)
-            if self.watcher._is_session_dir(path):
-                self.watcher._register_session(path)
             return
         self.on_modified(event)
 
@@ -86,6 +90,9 @@ class SessionWatcher:
         self._observer: PlatformObserver | None = None
         self._running = False
         self.on_ingest: Callable[[str, dict[str, int]], None] | None = None
+        # Normalized session directory path -> real working directory,
+        # loaded from ~/.kimi-code/session_index.jsonl.
+        self._workdir_map = load_workdir_map()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -140,29 +147,20 @@ class SessionWatcher:
             cutoff = time.time() - (7 * 24 * 3600)
             count = 0
             skipped = 0
+            self._workdir_map = load_workdir_map()
 
-            for hash_dir in self.sessions_dir.iterdir():
-                if not hash_dir.is_dir():
-                    continue
-                for session_dir in hash_dir.iterdir():
-                    if not session_dir.is_dir():
+            for identity in iter_session_wires(self.sessions_dir, self._workdir_map):
+                try:
+                    if identity.wire_path.stat().st_mtime < cutoff:
+                        skipped += 1
                         continue
-                    wire_file = session_dir / "wire.jsonl"
-                    if not wire_file.exists():
-                        continue
-                    # Skip very old sessions
-                    try:
-                        mtime = wire_file.stat().st_mtime
-                        if mtime < cutoff:
-                            skipped += 1
-                            continue
-                    except OSError:
-                        pass
-                    try:
-                        self._register_session(session_dir)
-                        count += 1
-                    except Exception:
-                        logger.exception(f"Failed to register session {session_dir.name}")
+                except OSError:
+                    pass
+                try:
+                    self._register_session(identity)
+                    count += 1
+                except Exception:
+                    logger.exception(f"Failed to register session {identity.session_id}")
 
             logger.info(
                 f"Background scan complete: {count} sessions registered, "
@@ -175,18 +173,20 @@ class SessionWatcher:
         """Check if path looks like a session directory."""
         return path.is_dir() and (path / "wire.jsonl").exists()
 
-    def _register_session(self, session_dir: Path) -> None:
-        """Register a session directory and do an initial read."""
-        session_id = session_dir.name
+    def _register_session(self, identity: SessionIdentity) -> None:
+        """Register a resolved session and do an initial read."""
         with self._lock:
-            if session_id in self._readers:
+            if identity.session_id in self._readers:
                 return
-            reader = SessionReader(session_dir, session_id)
-            self._readers[session_id] = reader
+            reader = SessionReader(
+                identity.session_dir, identity.session_id, wire_path=identity.wire_path
+            )
+            self._readers[identity.session_id] = reader
 
+        self.indexer.store.ensure_session(identity.session_id, identity.cwd)
         # Initial ingestion
         self._ingest(reader)
-        logger.debug(f"Registered session {session_id}")
+        logger.debug(f"Registered session {identity.session_id} (cwd={identity.cwd})")
 
     # ------------------------------------------------------------------
     # Ingestion
@@ -213,24 +213,33 @@ class SessionWatcher:
                 except Exception:
                     logger.exception("Ingest callback failed")
 
-    def _on_wire_changed(self, session_dir: Path) -> None:
-        """Callback when wire.jsonl is modified."""
-        session_id = session_dir.name
+    def _on_wire_changed(self, wire_path: Path) -> None:
+        """Callback when a wire.jsonl is modified."""
+        identity = resolve_session_identity(wire_path, self._workdir_map)
         with self._lock:
-            reader = self._readers.get(session_id)
+            reader = self._readers.get(identity.session_id)
             if reader is None:
-                reader = SessionReader(session_dir, session_id)
-                self._readers[session_id] = reader
+                reader = SessionReader(
+                    identity.session_dir, identity.session_id, wire_path=identity.wire_path
+                )
+                self._readers[identity.session_id] = reader
+        self.indexer.store.ensure_session(identity.session_id, identity.cwd)
         self._ingest(reader)
 
     def _on_state_changed(self, session_dir: Path) -> None:
         """Callback when state.json is modified."""
+        import os
+
         session_id = session_dir.name
+        key = os.path.normcase(os.path.normpath(str(session_dir)))
+        cwd = self._workdir_map.get(key, "")
         with self._lock:
             reader = self._readers.get(session_id)
             if reader is None:
                 reader = SessionReader(session_dir, session_id)
                 self._readers[session_id] = reader
+        if cwd:
+            self.indexer.store.ensure_session(session_id, cwd)
         try:
             state = reader.read_state()
             if state:

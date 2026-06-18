@@ -28,7 +28,7 @@ except ImportError:
         / "Roaming"
         / "uv"
         / "tools"
-        / "kimi-mneme"
+        / "mneme-kimi-code"
         / "Lib"
         / "site-packages",
         Path.home()
@@ -36,7 +36,7 @@ except ImportError:
         / "share"
         / "uv"
         / "tools"
-        / "kimi-mneme"
+        / "mneme-kimi-code"
         / "lib"
         / "python3.10"
         / "site-packages",
@@ -119,14 +119,14 @@ def _check_hooks_version() -> None:
             installed_version = version_file.read_text().strip()
             if installed_version != package_version:
                 print(
-                    f"[kimi-mneme] Hooks version mismatch: {installed_version} != {package_version}. "
+                    f"[mneme-kimi-code] Hooks version mismatch: {installed_version} != {package_version}. "
                     f"Run: mneme bootstrap",
                     file=sys.stderr,
                 )
         else:
             # No version file = very old hooks
             print(
-                "[kimi-mneme] Hooks version unknown. Run: mneme bootstrap",
+                "[mneme-kimi-code] Hooks version unknown. Run: mneme bootstrap",
                 file=sys.stderr,
             )
     except Exception:
@@ -166,7 +166,7 @@ def main() -> None:
 
     except Exception as e:
         # Fail-open: log error but don't block session
-        print(f"kimi-mneme hook error: {e}", file=sys.stderr)
+        print(f"mneme-kimi-code hook error: {e}", file=sys.stderr)
         sys.exit(0)
 
 

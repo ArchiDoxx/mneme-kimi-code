@@ -143,7 +143,7 @@ Die alte `kimi plugin install`-Methode funktioniert **nicht** mit Kimi Code CLI.
 - **MCP-Server** in `~/.kimi-code/mcp.json` (15+ Tools für Claude/Cursor/Goose und Kimi Code CLI selbst)
 - **Skill** `mem-search` unter `~/.kimi-code/skills/`
 
-Ein manueller `kimi plugin install`-Schritt ist weder nötig noch möglich. `mneme bootstrap` versucht aus Kompatibilitätsgründen noch den alten Plugin-Schritt; du kannst ihn mit `--no-plugin` überspringen, wenn du ausschließlich Hooks/MCP nutzen möchtest.
+Ein `kimi plugin install`-Schritt ist weder nötig noch möglich. `mneme bootstrap` führt diesen Legacy-Schritt **standardmäßig nicht mehr aus** — die Integration läuft ausschließlich über Hooks und den MCP-Server. Wer den alten Schritt dennoch versuchen will (z. B. mit dem Python-`kimi-cli`), kann ihn mit `--with-plugin` opt-in aktivieren.
 
 ### What `bootstrap` does
 
@@ -151,7 +151,7 @@ Ein manueller `kimi plugin install`-Schritt ist weder nötig noch möglich. `mne
 |------|-------------|
 | **Database** | Erstellt SQLite-DB unter `~/.kimi-code/mneme/mneme.db` |
 | **Hooks** | Registriert 4 Lifecycle-Hooks in `~/.kimi-code/config.toml` (injiziert Kontext beim Session-Start) |
-| **Plugin (legacy)** | Versucht `kimi plugin install` (funktioniert **nicht** mit Kimi Code CLI; überspringen mit `--no-plugin`) |
+| **Plugin (legacy)** | Standardmäßig **übersprungen** (funktioniert nicht mit Kimi Code CLI); opt-in via `--with-plugin` |
 | **MCP Server** | Registriert `mneme-kimi-code` MCP-Server in `~/.kimi-code/mcp.json` (15+ Tools für Claude/Cursor/Goose) |
 | **Skills** | Kopiert den `mem-search`-Skill nach `~/.kimi-code/skills/` (lernt der AI den search→timeline→get-Workflow) |
 | **Server** | Startet Web-Dashboard unter `http://localhost:37777` |
@@ -243,7 +243,7 @@ open http://localhost:37777
 ```mermaid
 flowchart TB
     subgraph kimi_cli["🖥️ Kimi Code CLI"]
-        hooks["🔌 Hooks<br/>7 lifecycle events"]
+        hooks["🔌 Hooks<br/>4 lifecycle events"]
         plugin["🔧 Plugin Tools<br/>3 AI-callable tools"]
         mcp_client["🔌 MCP Clients<br/>Claude • Cursor • Goose"]
     end
@@ -298,7 +298,7 @@ flowchart TB
 
 | Component | Purpose |
 |-----------|-------------|
-| **Hooks** | 7 Lifecycle-Event-Handler (SessionStart, PostToolUse, SessionEnd, PreCompact, PostCompact, etc.) |
+| **Hooks** | 4 Lifecycle-Hooks (SessionStart, SessionEnd, PreCompact, PostCompact); Tool-/Prompt-Daten kommen aus dem Wire-Watcher |
 | **Plugin** | 3 AI-aufrufbare Tools: `mneme_search`, `mneme_timeline`, `mneme_get` |
 | **Wire Watcher** | watchdog-basiertes Indexieren von Kimi CLI `wire.jsonl` + `state.json` |
 | **Extractor** | Sanitisiert Beobachtungen, fügt zur Pending-Queue hinzu, erstellt Checkpoints, erkennt Patterns |
