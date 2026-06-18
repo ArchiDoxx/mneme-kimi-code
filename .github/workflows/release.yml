@@ -1,0 +1,64 @@
+name: Release
+
+"on":
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish-pypi:
+    name: Build and publish to PyPI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.6.x"
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: "pyproject.toml"
+
+      - name: Build package
+        run: uv build
+
+      - name: Publish to PyPI
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        run: uv publish
+
+  publish-testpypi:
+    name: Build and publish to TestPyPI
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.6.x"
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: "pyproject.toml"
+
+      - name: Build package
+        run: uv build
+
+      - name: Publish to TestPyPI
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.TEST_PYPI_TOKEN }}
+        run: uv publish --publish-url https://test.pypi.org/legacy/

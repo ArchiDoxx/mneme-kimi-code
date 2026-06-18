@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+"""Hook: SessionStart — initialize session, inject context, auto-start server."""
+
+from __future__ import annotations
+
+import json
+import socket
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+
+# Silence loguru to keep stderr clean for Kimi CLI
+from loguru import logger
+
+logger.remove()
+
+# Ensure mneme package is importable — it may be installed via uv tool
+# or available in the Python environment that runs this hook
+try:
+    from mneme.config import load_config
+    from mneme.core.extractor import Extractor
+except ImportError:
+    # Fallback: try to find mneme in common uv tool locations
+    uv_tool_paths = [
+        Path.home()
+        / "AppData"
+        / "Roaming"
+        / "uv"
+        / "tools"
+        / "kimi-mneme"
+        / "Lib"
+        / "site-packages",
+        Path.home()
+        / ".local"
+        / "share"
+        / "uv"
+        / "tools"
+        / "kimi-mneme"
+        / "lib"
+        / "python3.10"
+        / "site-packages",
+    ]
+    for p in uv_tool_paths:
+        if p.exists():
+            sys.path.insert(0, str(p))
+            break
+    from mneme.config import load_config
+    from mneme.core.extractor import Extractor
+
+from mneme.wire.watcher import get_global_watcher
+
+
+def _is_server_running(host: str, port: int) -> bool:
+    """Check if the mneme server is already running."""
+    try:
+        # Short timeout to avoid blocking Kimi CLI startup
+        with socket.create_connection((host, port), timeout=0.1):
+            return True
+    except OSError:
+        return False
+
+
+def _start_server() -> None:
+    """Start the mneme web server in background if not running."""
+    try:
+        config = load_config()
+        server_cfg = config.get("server", {})
+
+        if not server_cfg.get("enabled", True):
+            return
+
+        if not server_cfg.get("auto_start", True):
+            return
+
+        host = server_cfg.get("host", "127.0.0.1")
+        port = server_cfg.get("port", 37777)
+
+        if _is_server_running(host, port):
+            return  # Already running
+
+        python_exe = sys.executable
+        log_file = Path.home() / ".kimi-code" / "mneme" / "server.log"
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+
+        if sys.platform == "win32":
+            # CREATE_NO_WINDOW — no console popup
+            subprocess.Popen(
+                [python_exe, "-c", "from mneme.server.app import main; main()"],
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.STDOUT,
+            )
+        else:
+            # Redirect stderr to log file so crashes are visible
+            with open(log_file, "a", encoding="utf-8") as lf:
+                lf.write(f"\n--- server start {datetime.now().isoformat()} ---\n")
+                subprocess.Popen(
+                    [python_exe, "-m", "mneme.server"],
+                    stdout=lf,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+
+    except Exception:
+        pass  # Fail silently — don't block Kimi CLI startup
+
+
+def _check_hooks_version() -> None:
+    """Warn if installed hooks are older than the mneme package."""
+    try:
+        from mneme import __version__ as package_version
+
+        hook_file = Path(__file__)
+        hooks_dir = hook_file.parent
+        version_file = hooks_dir / ".version"
+
+        if version_file.exists():
+            installed_version = version_file.read_text().strip()
+            if installed_version != package_version:
+                print(
+                    f"[kimi-mneme] Hooks version mismatch: {installed_version} != {package_version}. "
+                    f"Run: mneme bootstrap",
+                    file=sys.stderr,
+                )
+        else:
+            # No version file = very old hooks
+            print(
+                "[kimi-mneme] Hooks version unknown. Run: mneme bootstrap",
+                file=sys.stderr,
+            )
+    except Exception:
+        pass  # Fail silently
+
+
+def main() -> None:
+    """Handle SessionStart hook event."""
+    try:
+        # Check hooks version
+        _check_hooks_version()
+
+        # Auto-start server if configured
+        _start_server()
+
+        # Start wire watcher to index session traces from ~/.kimi-code/sessions/
+        try:
+            watcher = get_global_watcher()
+            watcher.start()
+        except Exception:
+            pass  # Fail silently — don't block Kimi CLI
+
+        # Force UTF-8 encoding on Windows
+        from mneme.compat import fix_windows_encoding
+
+        fix_windows_encoding()
+
+        input_data = json.load(sys.stdin)
+
+        extractor = Extractor()
+        result = extractor.handle_session_start(input_data)
+
+        if result:
+            print(result)
+
+        sys.exit(0)
+
+    except Exception as e:
+        # Fail-open: log error but don't block session
+        print(f"kimi-mneme hook error: {e}", file=sys.stderr)
+        sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
