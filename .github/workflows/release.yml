@@ -39,7 +39,7 @@ jobs:
   publish-testpypi:
     name: Build and publish to TestPyPI
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/master'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
