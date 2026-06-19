@@ -1,41 +1,58 @@
-# mneme-kimi-code — Persistent Memory for Kimi Code CLI
+# mneme-kimi-code — Persistent Memory for Kimi Code CLI **& Claude Code**
 
 [![PyPI](https://img.shields.io/pypi/v/mneme-kimi-code.svg?style=flat)](https://pypi.org/project/mneme-kimi-code/)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
-[![Kimi CLI](https://img.shields.io/badge/Kimi%20Code%20CLI-plugin-orange.svg)](https://moonshotai.github.io/kimi-cli/)
+[![Kimi CLI](https://img.shields.io/badge/Kimi%20Code%20CLI-supported-orange.svg)](https://moonshotai.github.io/kimi-cli/)
+[![Claude Code](https://img.shields.io/badge/Claude%20Code-supported-8A63D2.svg)](https://docs.claude.com/en/docs/claude-code)
 
 **Version:** <!-- VERSION -->2.0.24<!-- /VERSION -->
 
 > **Mneme** (Greek: Μνήμη) — the goddess of memory and the mother of the Muses.  
-> This project brings persistent, AI-compressed memory to [Kimi Code CLI](https://moonshotai.github.io/kimi-cli/).
+> This project brings persistent, AI-compressed memory to [Kimi Code CLI](https://moonshotai.github.io/kimi-cli/) **and [Claude Code](https://docs.claude.com/en/docs/claude-code)**.
 
-**🏷️ Tags:** `kimi-plugin` `kimi-code-cli` `kimi-plugins` `persistent-memory` `ai-memory` `coding-assistant`
+**🏷️ Tags:** `kimi-plugin` `kimi-code-cli` `claude-code` `claude-code-plugin` `persistent-memory` `ai-memory` `coding-assistant`
+
+---
+
+## Dual-Target: Kimi Code CLI **und** Claude Code
+
+mneme läuft auf **beiden** CLIs gleichzeitig. `mneme bootstrap` erkennt das Ziel automatisch oder du wählst es explizit:
+
+```bash
+mneme bootstrap --target kimi      # Kimi Code CLI  → ~/.kimi-code
+mneme bootstrap --target claude    # Claude Code    → ~/.claude
+mneme bootstrap                    # auto-detect
+```
+
+Jedes Ziel bekommt seine **eigene, getrennte Memory-DB** — beide laufen mit **voller Feature-Parität, ohne Abstriche**. Details siehe [Host-CLI wählen](#host-cli-wählen-kimi-code-cli-oder-claude-code).
 
 ---
 
 ## Fork-Hinweis
 
-Dieses Repository ist ein **Fork von [`barrelc/kimi-mneme`](https://github.com/barrelc/kimi-mneme)**, angepasst für die neue **Kimi Code CLI**.
+Dieses Repository ist ein **Fork von [`barrelc/kimi-mneme`](https://github.com/barrelc/kimi-mneme)**, angepasst für die **Kimi Code CLI** — und um native **Claude Code**-Unterstützung erweitert.
 
 Wichtige Unterschiede zum Original:
 
 - **Paketname auf PyPI:** `mneme-kimi-code` (statt `kimi-mneme`)
-- **Konfigurationspfad:** `~/.kimi-code/` (statt `~/.kimi/`)
-- **Plugin-Installation:** Kimi Code CLI unterstützt `kimi plugin install` **nicht**. Stattdessen werden Lifecycle-Hooks in `~/.kimi-code/config.toml` und der MCP-Server in `~/.kimi-code/mcp.json` registriert.
+- **Dual-Target:** Unterstützt sowohl Kimi Code CLI (`~/.kimi-code/`) als auch Claude Code (`~/.claude/`) — auswählbar via `mneme bootstrap --target`.
+- **Konfigurationspfad:** `~/.kimi-code/` bzw. `~/.claude/` (statt `~/.kimi/`)
+- **Integration:** Kein `plugin install` — Lifecycle-Hooks und MCP-Server werden direkt registriert (Kimi: `config.toml` + `mcp.json`; Claude: `settings.json` + `~/.claude.json`).
 - **Lizenz:** Das Original steht unter **AGPL-3.0**; dieser Fork bleibt ebenfalls unter **AGPL-3.0**. Siehe [LICENSE](LICENSE) und Abschnitt [Lizenz](#lizenz).
 
 ---
 
 ## What is mneme-kimi-code?
 
-**mneme-kimi-code** ist ein Plugin für [Kimi Code CLI](https://moonshotai.github.io/kimi-cli/), das persistentes Memory zu deinen Coding-Sessions hinzufügt. Es erfasst Kontext automatisch, komprimiert ihn mit KI und injiziert relevante Beobachtungen in zukünftige Sessions. Nie wieder den Faden verlieren — auch nach Tagen oder Wochen.
+**mneme-kimi-code** fügt persistentes Memory zu deinen Coding-Sessions in [Kimi Code CLI](https://moonshotai.github.io/kimi-cli/) und [Claude Code](https://docs.claude.com/en/docs/claude-code) hinzu. Es erfasst Kontext automatisch, komprimiert ihn mit KI und injiziert relevante Beobachtungen in zukünftige Sessions. Nie wieder den Faden verlieren — auch nach Tagen oder Wochen.
 
 ### Why mneme-kimi-code?
 
 - **Never lose context** — Deine Coding-Historie überlebt Sessions, Restarts und sogar wochenlange Inaktivität
 - **AI-powered memory** — Strukturiert rohe Tool-Outputs in durchsuchbare Beobachtungen
-- **Zero configuration** — Funktioniert out-of-the-box mit Kimi Code CLI
+- **Works with both CLIs** — Kimi Code CLI und Claude Code, mit getrennter Memory pro CLI
+- **Zero configuration** — Funktioniert out-of-the-box, ein Befehl genügt
 - **Privacy-first** — Lokale SQLite-Speicherung; KI-Strukturierung/Kompression sind optional und abschaltbar
 - **Cross-platform** — Windows, macOS, Linux
 
@@ -60,9 +77,9 @@ mneme-kimi-code ist so konzipiert, dass es **vollständig offline** funktioniert
 
 ### Who is this for?
 
-- Entwickler, die [Kimi Code CLI](https://moonshotai.github.io/kimi-cli/) nutzen und persistentes Projekt-Memory wollen
+- Entwickler, die [Kimi Code CLI](https://moonshotai.github.io/kimi-cli/) **oder** [Claude Code](https://docs.claude.com/en/docs/claude-code) nutzen und persistentes Projekt-Memory wollen
 - Teams, die an komplexen Codebases über mehrere Sessions arbeiten
-- Nutzer des [Moonshot AI](https://moonshot.ai/)-Ökosystems
+- Nutzer, die zwischen beiden CLIs wechseln und je CLI eine eigene Memory-Historie wollen
 
 ### Key Features
 
@@ -74,8 +91,8 @@ mneme-kimi-code ist so konzipiert, dass es **vollständig offline** funktioniert
 | 🔍 **Smart Search** | Volltext- (FTS5) + semantische (sqlite-vec) Hybridsuche über deine Projekt-Historie |
 | 📊 **Progressive Disclosure** | 3-Schicht-Retrieval: index → timeline → full details (token-effizient) |
 | 🖥️ **Web Viewer** | Echtzeit-Memory-Stream unter `http://localhost:37777` |
-| 🔌 **Kimi Plugin Tools** | `mneme_search`, `mneme_timeline`, `mneme_get` — Kimi kann sein eigenes Memory abfragen |
-| 🖇️ **MCP Server** | Claude Desktop, Cursor, Goose Integration — 15 Memory-Tools |
+| 🔌 **AI-callable Tools** | `mneme_search`, `mneme_timeline`, `mneme_get` — die AI fragt ihr eigenes Memory ab (Kimi-Plugin-Tools bzw. Claude-MCP-Tools `mcp__mneme__…`) |
+| 🖇️ **MCP Server** | Claude Code, Claude Desktop, Cursor, Goose Integration — 15 Memory-Tools |
 | 📝 **PROJECT.md** | Auto-generierter Projekt-Kontext aus strukturierten Beobachtungen |
 | 🔒 **Privacy Tags** | 3-Schicht-Filter: System-Content entfernen → Sensitive redacten → Deep-Sanitize (vor jeder KI-Verarbeitung) |
 | 📊 **Knowledge Collections** | Kuratiere und query projektspezifische Wissens-Korpora |
@@ -83,7 +100,7 @@ mneme-kimi-code ist so konzipiert, dass es **vollständig offline** funktioniert
 | 💰 **Token Economics** | Token-Einsparungen und Read-Cost pro Beobachtung |
 | ⚡ **Zero Config** | Installieren und vergessen — funktioniert automatisch |
 | 📁 **Project Config** | Pro-Projekt `.mneme.json` für Custom Settings |
-| 📌 **Session Checkpoints** | Kontext nach Kimi-CLI-Compaction wiederherstellen |
+| 📌 **Session Checkpoints** | Kontext nach Context-Compaction wiederherstellen (Kimi & Claude, via Pre/PostCompact-Hooks) |
 | 🔁 **Cross-Session Patterns** | Automatische Erkennung wiederkehrender Fehler, Fixes, Entscheidungen |
 | ✂️ **Truncation Tracking** | Protokolliert, wenn Tool-Outputs 100K Zeichen überschreiten |
 
@@ -180,6 +197,8 @@ Ein `kimi plugin install`-Schritt ist weder nötig noch möglich. `mneme bootstr
 | **Skills** | Kopiert den `mem-search`-Skill nach `~/.kimi-code/skills/` (lernt der AI den search→timeline→get-Workflow) |
 | **Server** | Startet Web-Dashboard unter `http://localhost:37777` |
 
+> **Hinweis (Claude Code):** Mit `--target claude` gelten dieselben Schritte unter `~/.claude/`: Hooks werden in `~/.claude/settings.json` gemerged (mit Backup), der MCP-Server `mneme` in `~/.claude.json` registriert, der Skill nach `~/.claude/skills/` kopiert und die DB unter `~/.claude/mneme/mneme.db` angelegt. Volle Session-Daten kommen aus dem Transcript-Watcher statt dem Wire-Watcher.
+
 > **One command = fully configured.** Kein manuelles Setup nötig.
 
 > **Recommended:** Installiere `sqlite3` CLI für Datenbank-Inspektion und interne Operationen:
@@ -194,10 +213,11 @@ Ein `kimi plugin install`-Schritt ist weder nötig noch möglich. `mneme bootstr
 > winget install SQLite.SQLite
 > ```
 
-### Use Kimi Code CLI normally
+### Use your CLI normally
 
 ```bash
-kimi
+kimi       # wenn du --target kimi gebootstrappt hast
+claude     # wenn du --target claude gebootstrappt hast
 ```
 
 Das war's. Jede Session wird automatisch erfasst und indiziert. Wenn du eine neue Session in einem Projekt startest, wird vorheriger Kontext automatisch injiziert.
@@ -206,12 +226,12 @@ Das war's. Jede Session wird automatisch erfasst und indiziert. Wenn du eine neu
 
 Nach `mneme bootstrap` funktioniert alles automatisch:
 
-1. **Auto-injected context** bei jedem `kimi`-Start — zeigt "What we did before" mit echten Prompts, Dateien und Tools
+1. **Auto-injected context** bei jedem Session-Start — zeigt "What we did before" mit echten Prompts, Dateien und Tools (Kimi: `hookSpecificOutput.context`; Claude: `additionalContext`)
 2. **MCP tools** — 15+ Tools inklusive `memory_search`, `memory_semantic_search`, `smart_search`, `smart_outline`
-3. **Skills** — Kimi lernt den 3-Layer-Workflow: search → timeline → get (10x Token-Einsparung)
+3. **Skills** — die AI lernt den 3-Layer-Workflow: search → timeline → get (10x Token-Einsparung)
 4. **Web UI** — Timeline durchsuchen unter `http://localhost:37777`
 
-> 💡 **Frag Kimi:** *"What did we do yesterday?"* oder *"Search my memory for the auth bug"* — es werden die Memory-Tools automatisch genutzt.
+> 💡 **Frag die AI:** *"What did we do yesterday?"* oder *"Search my memory for the auth bug"* — die Memory-Tools werden automatisch genutzt.
 
 ---
 
@@ -219,13 +239,15 @@ Nach `mneme bootstrap` funktioniert alles automatisch:
 
 Nach der Installation solltest du folgendes prüfen bzw. anpassen:
 
-1. **API-Key / LLM-Provider:** Falls du nicht den Standard-Provider nutzen möchtest, setze in `~/.kimi-code/mneme/config.json` oder via Umgebungsvariablen:
+1. **API-Key / LLM-Provider:** Falls du nicht den Standard-Provider nutzen möchtest, setze in `<config-dir>/mneme/config.json` (`~/.kimi-code` bzw. `~/.claude`) oder via Umgebungsvariablen:
    - `MNEME_LLM_PROVIDER` (`kimi`, `ollama`, `openai_compatible`)
    - `MNEME_LLM_MODEL` (z. B. `kimi-k2.5`)
    - `MNEME_LLM_API_KEY`
    - `MNEME_LLM_BASE_URL` (für eigene/self-hosted Endpunkte)
+   > **Claude Code:** Claude Code nutzt keinen Kimi-OAuth-Token. Ohne konfigurierten LLM fällt mneme automatisch auf den **heuristischen Modus** zurück (regelbasierte Strukturierung). Für KI-Strukturierung/-Kompression unter Claude einen `ollama`- oder `openai_compatible`-Provider setzen.
 2. **Server-URL:** Standard ist `http://127.0.0.1:37777`. Änderbar via `MNEME_SERVER_HOST` und `MNEME_SERVER_PORT`.
-3. **Datenbank- & Vektor-Pfade:** Standard unter `~/.kimi-code/mneme/`. Änderbar via `MNEME_DB_PATH` und `MNEME_VECTOR_PATH`.
+3. **Datenbank- & Vektor-Pfade:** Standard unter `~/.kimi-code/mneme/` bzw. `~/.claude/mneme/` (je nach Target). Änderbar via `MNEME_DB_PATH` und `MNEME_VECTOR_PATH`.
+   - **Target erzwingen:** `MNEME_TARGET=kimi|claude` überschreibt die Auto-Erkennung für einzelne `mneme`-Befehle.
 4. **Privacy-Excludes:** Passe in `config.json` oder `.mneme.json` die `privacy.exclude_patterns` an, damit Secrets/Keys niemals gespeichert werden.
 5. **Installation verifizieren:**
    ```bash
@@ -248,7 +270,7 @@ Nach der Installation solltest du folgendes prüfen bzw. anpassen:
 
 ### Search your memory
 
-Innerhalb von Kimi Code CLI kann die AI dein Memory durchsuchen:
+Innerhalb von Kimi Code CLI **oder** Claude Code kann die AI dein Memory durchsuchen:
 
 ```
 > Search my memory for the auth bug we fixed last week
@@ -266,14 +288,15 @@ open http://localhost:37777
 
 ```mermaid
 flowchart TB
-    subgraph kimi_cli["🖥️ Kimi Code CLI"]
+    subgraph host_cli["🖥️ Host CLI (Kimi Code CLI / Claude Code)"]
         hooks["🔌 Hooks<br/>4 lifecycle events"]
-        plugin["🔧 Plugin Tools<br/>3 AI-callable tools"]
-        mcp_client["🔌 MCP Clients<br/>Claude • Cursor • Goose"]
+        plugin["🔧 AI Tools<br/>Kimi plugin tools / Claude MCP tools"]
+        mcp_client["🔌 MCP Clients<br/>Claude Code • Cursor • Goose"]
     end
 
-    subgraph ingestion["📥 Ingestion Layer"]
-        wire["📡 Wire Watcher<br/>watchdog indexes wire.jsonl"]
+    subgraph ingestion["📥 Ingestion Layer (target-aware)"]
+        wire["📡 Wire Watcher<br/>Kimi: wire.jsonl"]
+        transcript["📡 Transcript Watcher<br/>Claude: projects/*.jsonl"]
         extractor["📥 Extractor<br/>sanitize • queue • checkpoints"]
     end
 
@@ -284,19 +307,20 @@ flowchart TB
         analyzer["🌳 Codebase Analyzer<br/>Tree-sitter AST"]
     end
 
-    subgraph storage["💾 Storage Layer"]
-        sqlite[("SQLite<br/>raw • structured • vectors<br/>collections • wire")]
+    subgraph storage["💾 Storage Layer (separate per target)"]
+        sqlite[("SQLite<br/>~/.kimi-code/mneme or ~/.claude/mneme<br/>raw • structured • vectors • wire")]
         vec["🔍 sqlite-vec<br/>384-dim embeddings"]
     end
 
     subgraph interfaces["🌐 Interfaces"]
         server["Web Server<br/>localhost:37777 • SSE"]
         mcp_server["MCP Server<br/>15 tools"]
-        project_md[".kimi-code/PROJECT.md<br/>.kimi-code/AGENTS.md"]
+        project_md["PROJECT.md<br/>AGENTS.md"]
     end
 
     hooks --> extractor
-    wire --> extractor
+    wire -->|WireEvent| extractor
+    transcript -->|WireEvent| extractor
     extractor --> sqlite
     extractor -->|pending queue| worker
     worker -->|structured obs| sqlite
@@ -309,22 +333,25 @@ flowchart TB
     sqlite --> project_md
     plugin --> mcp_server
     mcp_client --> mcp_server
-    injector -->|context| kimi_cli
+    injector -->|context| host_cli
 
-    style kimi_cli fill:#1a1a2e,stroke:#16213e,stroke-width:2px,color:#fff
+    style host_cli fill:#1a1a2e,stroke:#16213e,stroke-width:2px,color:#fff
     style ingestion fill:#16213e,stroke:#0f3460,stroke-width:2px,color:#fff
     style processing fill:#0f3460,stroke:#e94560,stroke-width:2px,color:#fff
     style storage fill:#1a1a2e,stroke:#533483,stroke-width:2px,color:#fff
     style interfaces fill:#16213e,stroke:#0f3460,stroke-width:2px,color:#fff
 ```
 
+> Beide Watcher münden in dieselben typisierten `WireEvent`-Modelle → ab dem Indexer ist die gesamte Pipeline **CLI-agnostisch**. Genau hier liegt die 1:1-Parität: nur Ingestion (Wire vs. Transcript) und Registrierung (config.toml vs. settings.json) unterscheiden sich, alles dahinter ist geteilt.
+
 ### Components
 
 | Component | Purpose |
 |-----------|-------------|
-| **Hooks** | 4 Lifecycle-Hooks (SessionStart, SessionEnd, PreCompact, PostCompact); Tool-/Prompt-Daten kommen aus dem Wire-Watcher |
-| **Plugin** | 3 AI-aufrufbare Tools: `mneme_search`, `mneme_timeline`, `mneme_get` |
-| **Wire Watcher** | watchdog-basiertes Indexieren von Kimi CLI `wire.jsonl` + `state.json` |
+| **Hooks** | 4 Lifecycle-Hooks (SessionStart, SessionEnd, PreCompact, PostCompact); volle Tool-/Prompt-Daten kommen aus dem Wire- bzw. Transcript-Watcher |
+| **AI Tools** | 3 AI-aufrufbare Tools: `mneme_search`, `mneme_timeline`, `mneme_get` (Kimi: Plugin-Tools; Claude: MCP-Tools `mcp__mneme__…`) |
+| **Wire Watcher** (Kimi) | watchdog-basiertes Indexieren von Kimi CLI `wire.jsonl` + `state.json` |
+| **Transcript Watcher** (Claude) | watchdog-basiertes Tailing von `~/.claude/projects/<cwd>/<session>.jsonl` → identische `WireEvent`-Modelle |
 | **Extractor** | Sanitisiert Beobachtungen, fügt zur Pending-Queue hinzu, erstellt Checkpoints, erkennt Patterns |
 | **StructuringWorker** | Background-Worker: AI-Strukturierung (Kimi/Ollama/OpenAI) → heuristic fallback |
 | **Compressor** | Generiert Session-Summaries via konfigurierbarem LLM |
@@ -340,13 +367,17 @@ flowchart TB
 ## CLI Commands
 
 ```bash
-mneme bootstrap          # One-shot setup (hooks, MCP, DB, server)
-mneme update             # Update hooks and config to latest version
-mneme server             # Start web server
-mneme init               # Initialize database only
-mneme stats              # Show database statistics
-mneme cleanup --days 30  # Remove old observations
+mneme bootstrap                   # One-shot setup, auto-detects the host CLI
+mneme bootstrap --target claude   # Setup for Claude Code (~/.claude)
+mneme bootstrap --target kimi     # Setup for Kimi Code CLI (~/.kimi-code)
+mneme update                      # Update hooks and config to latest version
+mneme server                      # Start web server
+mneme init                        # Initialize database only
+mneme stats                       # Show database statistics
+mneme cleanup --days 30           # Remove old observations
 ```
+
+> Ad-hoc-Befehle (`stats`, `sql`, `server` …) lösen das Ziel via Marker-Datei (letztes Bootstrap) bzw. `MNEME_TARGET` auf. Beispiel: `MNEME_TARGET=claude mneme stats`.
 
 ---
 
@@ -387,10 +418,10 @@ Dies merged mit der globalen Config (Projekt-Werte überschreiben globale).
 ## Requirements
 
 - **Python**: 3.10+
-- **Kimi Code CLI**: 1.41+
+- **Host CLI** (mindestens eine): **Kimi Code CLI** 1.41+ **oder** **Claude Code**
 - **sqlite3 CLI**: Benötigt für Datenbank-Inspektion und interne Operationen. Installiere via System-Paketmanager (`apt install sqlite3`, `brew install sqlite3`, `winget install SQLite.SQLite`, etc.)
 - **OS**: Windows, macOS, Linux
-- **Optional**: Kein API-Key für Kimi nötig — verwendet den Kimi CLI OAuth-Token. Alternativ Ollama/OpenAI-compatible für lokale/self-hosted LLMs. AI-Strukturierung/Kompression fallen graceful auf heuristic mode zurück, wenn offline.
+- **Optional (LLM):** Für Kimi kein API-Key nötig (nutzt den Kimi CLI OAuth-Token). Für Claude Code einen `ollama`- oder `openai_compatible`-Provider setzen (Claude hat keinen Kimi-Token). In allen Fällen fällt AI-Strukturierung/Kompression graceful auf den **heuristic mode** zurück, wenn offline.
 
 ---
 
