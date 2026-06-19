@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mneme-kimi-code"
-version = "2.0.24.post1"
+version = "2.0.24"
 description = "Fork of kimi-mneme persistent memory plugin, adapted for Kimi Code CLI"
 readme = "README.md"
 license = { text = "AGPL-3.0" }
