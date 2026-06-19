@@ -15,6 +15,7 @@ import click
 from mneme import __version__
 from mneme.compat import fix_windows_encoding
 from mneme.config import load_config
+from mneme.targets import CLAUDE, claude_target, detect_target_name, write_marker
 from mneme.updater import is_update_available, print_update_notice, upgrade_package
 
 fix_windows_encoding()
@@ -50,8 +51,49 @@ def get_kimi_dir() -> Path:
 
 
 def get_mneme_dir() -> Path:
-    """Get the mneme data directory."""
-    return get_kimi_dir() / "mneme"
+    """Get the mneme data directory for the active target.
+
+    Resolves to ``~/.kimi-code/mneme`` or ``~/.claude/mneme`` depending on the
+    active target (env ``MNEME_TARGET`` / marker / auto-detect). ``bootstrap``
+    sets ``MNEME_TARGET`` up front so every step writes to the right place.
+    """
+    from mneme.targets import active_target
+
+    return active_target().data_dir
+
+
+def _mneme_python() -> str:
+    """Return the most stable Python interpreter that has mneme installed.
+
+    Prefers the persistent uv-tool interpreter (survives uvx cache purges) over
+    an ephemeral ``sys.executable``.
+    """
+    candidates = [
+        Path.home()
+        / "AppData"
+        / "Roaming"
+        / "uv"
+        / "tools"
+        / "mneme-kimi-code"
+        / "Scripts"
+        / "python.exe",
+        Path.home() / ".local" / "share" / "uv" / "tools" / "mneme-kimi-code" / "bin" / "python",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return sys.executable
+
+
+def _atomic_write_json(path: Path, data: object) -> None:
+    """Write JSON to ``path`` atomically (temp file + os.replace)."""
+    import os
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, path)
 
 
 @click.group()
@@ -897,7 +939,7 @@ def _register_hooks() -> bool:
         script_path = stable_hooks_dir / script
         # Use forward slashes in paths to avoid TOML escape issues on Windows.
         # Wrap paths in quotes to handle spaces (e.g. "Program Files" on Windows).
-        cmd = f'"{python_exe}" "{script_path}"'.replace("\\", "/")
+        cmd = f'"{python_exe}" "{script_path}" --target kimi'.replace("\\", "/")
         hook_entries.append(f"[[hooks]]\nevent = \"{event}\"\ncommand = '{cmd}'\n")
 
     hook_block = (
@@ -1084,6 +1126,7 @@ def _register_mcp() -> bool:
         "mneme-kimi-code": {
             "command": sys.executable,
             "args": ["-m", "mneme.mcp_server"],
+            "env": {"MNEME_TARGET": "kimi"},
         }
     }
 
@@ -1141,6 +1184,162 @@ def _install_skills() -> bool:
 
     except Exception as e:
         click.echo(f" Failed to install skills: {e}")
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Claude Code registration (settings.json hooks, ~/.claude.json MCP, skills)
+# ---------------------------------------------------------------------------
+
+# Hook scripts shared between targets. The Kimi wire watcher / Claude transcript
+# watcher (running in the server) capture per-tool and per-prompt data, so only
+# these lifecycle hooks need registering directly.
+_CLAUDE_HOOKS = [
+    ("SessionStart", "session_start.py"),
+    ("SessionEnd", "session_end.py"),
+    ("PreCompact", "pre_compact.py"),
+    ("PostCompact", "post_compact.py"),
+]
+
+
+def _copy_hook_scripts(stable_hooks_dir: Path) -> None:
+    """Copy hook scripts (+ package marker) into a stable per-target location."""
+    source_hooks_dir = get_project_root() / "hooks"
+    stable_hooks_dir.mkdir(parents=True, exist_ok=True)
+    scripts = {script for _, script in _CLAUDE_HOOKS} | {"__init__.py"}
+    for script in scripts:
+        src = source_hooks_dir / script
+        if src.exists():
+            shutil.copy2(src, stable_hooks_dir / script)
+    with contextlib.suppress(Exception):
+        (stable_hooks_dir / ".version").write_text(__version__, encoding="utf-8")
+
+
+def _register_hooks_claude() -> bool:
+    """Register lifecycle hooks in Claude Code's ``settings.json`` (merge, not clobber)."""
+    click.echo("Registering hooks (Claude Code)...")
+
+    target = claude_target()
+    settings_path = target.config_dir / "settings.json"
+    stable_hooks_dir = target.data_dir / "hooks"
+    _copy_hook_scripts(stable_hooks_dir)
+
+    python_exe = _mneme_python()
+    marker = str(stable_hooks_dir).replace("\\", "/").lower()
+
+    def _is_mneme_group(group: dict) -> bool:
+        try:
+            for hook in group.get("hooks", []):
+                cmd = str(hook.get("command", "")).replace("\\", "/").lower()
+                if marker in cmd or "mneme" in cmd:
+                    return True
+        except Exception:
+            pass
+        return False
+
+    try:
+        if settings_path.exists():
+            shutil.copy2(settings_path, settings_path.with_name("settings.json.mneme-backup"))
+            with open(settings_path, encoding="utf-8") as f:
+                settings = json.load(f)
+        else:
+            settings = {}
+        if not isinstance(settings, dict):
+            settings = {}
+
+        hooks_cfg = settings.get("hooks")
+        if not isinstance(hooks_cfg, dict):
+            hooks_cfg = {}
+
+        for event, script in _CLAUDE_HOOKS:
+            script_path = stable_hooks_dir / script
+            command = f'"{python_exe}" "{script_path}" --target claude'
+            existing = hooks_cfg.get(event)
+            groups = [
+                g
+                for g in (existing if isinstance(existing, list) else [])
+                if isinstance(g, dict) and not _is_mneme_group(g)
+            ]
+            groups.append(
+                {"hooks": [{"type": "command", "command": command, "timeout": 30}]}
+            )
+            hooks_cfg[event] = groups
+
+        settings["hooks"] = hooks_cfg
+        _atomic_write_json(settings_path, settings)
+        click.echo(f" Hooks registered in {settings_path}")
+        return True
+
+    except Exception as e:
+        click.echo(f" Failed to register Claude hooks: {e}")
+        return False
+
+
+def _register_mcp_claude() -> bool:
+    """Register the mneme MCP server (user scope) in ``~/.claude.json`` (merge)."""
+    click.echo(" Registering MCP server (Claude Code)...")
+
+    # The user-scope MCP config lives at ~/.claude.json (home), not inside
+    # ~/.claude/.
+    claude_json = Path.home() / ".claude.json"
+    entry = {
+        "type": "stdio",
+        "command": _mneme_python(),
+        "args": ["-m", "mneme.mcp_server"],
+        "env": {"MNEME_TARGET": "claude"},
+    }
+
+    try:
+        if claude_json.exists():
+            shutil.copy2(claude_json, claude_json.with_name(".claude.json.mneme-backup"))
+            with open(claude_json, encoding="utf-8") as f:
+                data = json.load(f)
+        else:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+
+        servers = data.get("mcpServers")
+        if not isinstance(servers, dict):
+            servers = {}
+        # Drop any legacy Kimi-named server to avoid duplicates.
+        servers.pop("mneme-kimi-code", None)
+        servers["mneme"] = entry
+        data["mcpServers"] = servers
+
+        _atomic_write_json(claude_json, data)
+        click.echo(f" MCP server 'mneme' registered in {claude_json}")
+        return True
+
+    except Exception as e:
+        click.echo(f" Failed to register Claude MCP: {e}")
+        return False
+
+
+def _install_skills_claude() -> bool:
+    """Copy skill files into Claude Code's user skills directory."""
+    click.echo(" Installing skills (Claude Code)...")
+
+    source_skills = get_project_root() / "skills"
+    if not source_skills.exists():
+        click.echo(" No skills directory found, skipping")
+        return True
+
+    dest = claude_target().config_dir / "skills"
+    dest.mkdir(parents=True, exist_ok=True)
+
+    try:
+        for skill_dir in source_skills.iterdir():
+            if skill_dir.is_dir():
+                target_dir = dest / skill_dir.name
+                if target_dir.exists():
+                    shutil.rmtree(target_dir)
+                shutil.copytree(skill_dir, target_dir)
+                click.echo(f"  Installed skill: {skill_dir.name}")
+        click.echo(f" Skills installed to {dest}")
+        return True
+    except Exception as e:
+        click.echo(f" Failed to install Claude skills: {e}")
         return False
 
 
@@ -1395,40 +1594,61 @@ def _interactive_sql_shell(conn: sqlite3.Connection) -> None:
 
 
 @main.command()
+@click.option(
+    "--target",
+    "target_opt",
+    type=click.Choice(["auto", "kimi", "claude"]),
+    default="auto",
+    help="Host CLI to integrate with (auto-detects by default)",
+)
 @click.option("--no-server", is_flag=True, help="Don't start web server")
 @click.option(
     "--with-plugin",
     is_flag=True,
-    help="Also run the legacy `kimi plugin install` (not supported on Kimi Code CLI)",
+    help="Also run the legacy `kimi plugin install` (Kimi target only; not supported on Kimi Code CLI)",
 )
 @click.option("--no-plugin", is_flag=True, help="Deprecated: plugin install is off by default")
-def bootstrap(no_server: bool, with_plugin: bool, no_plugin: bool) -> None:
-    """One-shot setup for kimi-mneme.
+def bootstrap(target_opt: str, no_server: bool, with_plugin: bool, no_plugin: bool) -> None:
+    """One-shot setup for mneme.
 
-    Registers hooks, installs plugin, initializes database, and starts web server.
-    Safe to run multiple times — idempotent.
+    Registers hooks, the MCP server, the memory skill, initializes the database,
+    and starts the web server for the chosen host CLI (Kimi Code CLI or Claude
+    Code). Safe to run multiple times — idempotent.
     """
+    import os
+
     from mneme import __version__
 
-    click.echo(" Bootstrapping kimi-mneme...")
+    chosen = detect_target_name() if target_opt == "auto" else target_opt
+    # Pin the target for every step in this process and for later ad-hoc commands.
+    os.environ["MNEME_TARGET"] = chosen
+    write_marker(chosen)
+
+    host_label = "Claude Code" if chosen == CLAUDE else "Kimi Code CLI"
+    click.echo(f" Bootstrapping mneme for {host_label}...")
     click.echo(f" Version: {__version__}")
-    click.echo(f" Python: {sys.executable}")
+    click.echo(f" Target:  {chosen}  (data dir: {get_mneme_dir()})")
+    click.echo(f" Python:  {sys.executable}")
     click.echo()
 
     steps = [
         ("Database", _init_database),
         ("Configuration", _create_default_config),
-        ("Hooks", _register_hooks),
     ]
 
-    # The npm Kimi Code CLI has no `kimi plugin install`; the plugin step is a
-    # no-op there, so it is opt-in via --with-plugin. Integration runs via the
-    # hooks (above) and the MCP server (below).
-    if with_plugin:
-        steps.append(("Plugin", _install_plugin))
-
-    steps.append(("MCP Server", _register_mcp))
-    steps.append(("Skills", _install_skills))
+    if chosen == CLAUDE:
+        steps.append(("Hooks", _register_hooks_claude))
+        steps.append(("MCP Server", _register_mcp_claude))
+        steps.append(("Skills", _install_skills_claude))
+    else:
+        steps.append(("Hooks", _register_hooks))
+        # The npm Kimi Code CLI has no `kimi plugin install`; the plugin step is
+        # a no-op there, so it is opt-in via --with-plugin. Integration runs via
+        # the hooks (above) and the MCP server (below).
+        if with_plugin:
+            steps.append(("Plugin", _install_plugin))
+        steps.append(("MCP Server", _register_mcp))
+        steps.append(("Skills", _install_skills))
 
     if not no_server:
         steps.append(("Server", _start_server))
@@ -1442,11 +1662,14 @@ def bootstrap(no_server: bool, with_plugin: bool, no_plugin: bool) -> None:
             click.echo(f"  Step '{name}' had issues, continuing...")
 
     click.echo("\n" + "=" * 50)
-    click.echo(" kimi-mneme bootstrapped successfully!")
+    click.echo(f" mneme bootstrapped successfully for {host_label}!")
     click.echo("=" * 50)
     click.echo()
     click.echo("Next steps:")
-    click.echo("  1. Restart Kimi CLI: kimi")
+    if chosen == CLAUDE:
+        click.echo("  1. Restart Claude Code: claude")
+    else:
+        click.echo("  1. Restart Kimi CLI: kimi")
     click.echo("  2. Visit web UI: http://localhost:37777")
     click.echo("  3. Set your API key for AI compression:")
     click.echo("     export MOONSHOT_API_KEY=your-key")

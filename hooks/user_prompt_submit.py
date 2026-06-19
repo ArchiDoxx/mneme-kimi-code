@@ -53,8 +53,9 @@ def main() -> None:
     """Handle UserPromptSubmit hook event."""
     try:
         # Force UTF-8 encoding on Windows
-        from mneme.compat import fix_windows_encoding
+        from mneme.compat import apply_target_from_argv, fix_windows_encoding
 
+        apply_target_from_argv()
         fix_windows_encoding()
 
         input_data = json.load(sys.stdin)

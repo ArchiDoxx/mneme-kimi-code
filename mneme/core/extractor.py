@@ -63,6 +63,19 @@ class Extractor:
 
         if parts:
             combined = "\n\n".join(parts)
+            from mneme.targets import CLAUDE, active_target
+
+            if active_target().name == CLAUDE:
+                # Claude Code injects SessionStart context via additionalContext.
+                return json.dumps(
+                    {
+                        "hookSpecificOutput": {
+                            "hookEventName": "SessionStart",
+                            "additionalContext": combined,
+                        }
+                    }
+                )
+            # Kimi Code CLI reads hookSpecificOutput.context.
             return json.dumps(
                 {
                     "hookSpecificOutput": {
@@ -333,7 +346,13 @@ class Extractor:
 
         # Get output or error
         if success:
-            tool_output = data.get("tool_output", "")
+            # Kimi hooks use `tool_output`; Claude Code uses `tool_response`
+            # (which may be a string or a structured object).
+            tool_output = data.get("tool_output")
+            if tool_output is None:
+                tool_output = data.get("tool_response", "")
+            if not isinstance(tool_output, str):
+                tool_output = json.dumps(tool_output, ensure_ascii=False)
             error = None
 
             # Detect and record truncation

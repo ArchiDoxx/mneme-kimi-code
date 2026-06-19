@@ -57,16 +57,29 @@ class _WireEventHandler(FileSystemEventHandler):
         self.on_modified(event)
 
 
-_global_watcher: SessionWatcher | None = None
+_global_watcher: object | None = None
 _global_lock = threading.Lock()
 
 
-def get_global_watcher(db_path: str | None = None) -> SessionWatcher:
-    """Get or create the global singleton watcher."""
+def get_global_watcher(db_path: str | None = None):
+    """Get or create the global singleton watcher for the active target.
+
+    Returns a Kimi :class:`SessionWatcher` or a
+    :class:`~mneme.wire.claude_watcher.ClaudeProjectsWatcher` depending on the
+    active target. Both expose the same ``start`` / ``stop`` / ``on_ingest``
+    interface, so callers (server lifespan, hooks) are target-agnostic.
+    """
     global _global_watcher
     with _global_lock:
         if _global_watcher is None:
-            _global_watcher = SessionWatcher(db_path)
+            from mneme.targets import CLAUDE, detect_target_name
+
+            if detect_target_name() == CLAUDE:
+                from mneme.wire.claude_watcher import ClaudeProjectsWatcher
+
+                _global_watcher = ClaudeProjectsWatcher(db_path)
+            else:
+                _global_watcher = SessionWatcher(db_path)
         return _global_watcher
 
 

@@ -76,6 +76,10 @@ def _stop_server() -> None:
 def main() -> None:
     """Handle SessionEnd hook event."""
     try:
+        from mneme.compat import apply_target_from_argv
+
+        apply_target_from_argv()
+
         input_data = json.load(sys.stdin)
 
         extractor = Extractor()

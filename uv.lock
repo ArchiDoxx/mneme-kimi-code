@@ -1344,7 +1344,7 @@ wheels = [
 
 [[package]]
 name = "mneme-kimi-code"
-version = "2.0.24.post1"
+version = "2.0.24"
 source = { editable = "." }
 dependencies = [
     { name = "click" },

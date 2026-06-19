@@ -135,6 +135,30 @@ mneme bootstrap
 
 > **Hinweis:** `pip install --user` installiert unter `~/.local/bin` (Linux/macOS) oder `%APPDATA%\Python\Scripts` (Windows). Stelle sicher, dass dieses Verzeichnis in deinem `PATH` liegt.
 
+### Host-CLI wählen: Kimi Code CLI **oder** Claude Code
+
+mneme unterstützt **beide** CLIs als Host (dual-target). `mneme bootstrap` erkennt das Ziel automatisch; du kannst es explizit setzen:
+
+```bash
+mneme bootstrap --target kimi      # Kimi Code CLI  (~/.kimi-code)
+mneme bootstrap --target claude    # Claude Code    (~/.claude)
+mneme bootstrap                    # auto-detect
+```
+
+Jedes Ziel hat seine **eigene, getrennte Memory-DB** (`~/.kimi-code/mneme/` bzw. `~/.claude/mneme/`), sodass beide CLIs parallel mit voller Feature-Parität laufen können. Das aktive Ziel lässt sich pro Prozess via `MNEME_TARGET=kimi|claude` überschreiben.
+
+| | Kimi Code CLI | Claude Code |
+|---|---|---|
+| Config-Dir | `~/.kimi-code` | `~/.claude` (bzw. `$CLAUDE_CONFIG_DIR`) |
+| Session-Quelle | `sessions/**/wire.jsonl` | `projects/<cwd>/<session>.jsonl` |
+| Hook-Registrierung | `config.toml` | `settings.json` (gemerged, Backup) |
+| MCP-Registrierung | `~/.kimi-code/mcp.json` | `~/.claude.json` (`mcpServers.mneme`) |
+| Skill | `~/.kimi-code/skills/` | `~/.claude/skills/` |
+| Lifecycle-Hooks | SessionStart/End, Pre/PostCompact | SessionStart/End, Pre/PostCompact |
+| Volle Session-Daten | Wire-Watcher (im Server) | Transcript-Watcher (im Server) |
+
+Für Claude Code werden Tool-Calls, Tool-Outputs, Prompts, Reasoning und Token-Verbrauch aus dem **Transcript** (`~/.claude/projects/.../<session>.jsonl`) gelesen — dieselben strukturierten Beobachtungen wie bei Kimi, ohne Feature-Abstriche.
+
 ### Wichtiger Hinweis zu Kimi Code CLI
 
 Die alte `kimi plugin install`-Methode funktioniert **nicht** mit Kimi Code CLI. Die Integration für Kimi Code CLI läuft ausschließlich über:

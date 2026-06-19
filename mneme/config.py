@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
+
+from mneme.targets import active_target
 
 DEFAULT_CONFIG = {
     "db": {
@@ -122,8 +125,21 @@ def _expand_env_vars(value: Any) -> Any:
 
 
 def get_config_path() -> Path:
-    """Return the path to the config file."""
-    return Path.home() / ".kimi-code" / "mneme" / "config.json"
+    """Return the path to the config file for the active target."""
+    return active_target().data_dir / "config.json"
+
+
+def _apply_target_paths(config: dict[str, Any]) -> None:
+    """Point path-bearing defaults at the active target's data dir.
+
+    Called before user-config / env overrides so that an unconfigured install
+    writes its DB, vectors and logs under ``~/.claude/mneme`` (Claude) or
+    ``~/.kimi-code/mneme`` (Kimi) as appropriate, while explicit overrides win.
+    """
+    data_dir = active_target().data_dir
+    config["db"]["path"] = str(data_dir / "mneme.db")
+    config["vector"]["path"] = str(data_dir / "chroma")
+    config["logging"]["file"] = str(data_dir / "mneme.log")
 
 
 def _find_project_config() -> dict[str, Any] | None:
@@ -146,7 +162,8 @@ def _find_project_config() -> dict[str, Any] | None:
 
 def load_config() -> dict[str, Any]:
     """Load configuration from file with defaults."""
-    config = DEFAULT_CONFIG.copy()
+    config = copy.deepcopy(DEFAULT_CONFIG)
+    _apply_target_paths(config)
     config_path = get_config_path()
 
     if config_path.exists():

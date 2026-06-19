@@ -136,6 +136,12 @@ def _check_hooks_version() -> None:
 def main() -> None:
     """Handle SessionStart hook event."""
     try:
+        # Resolve the host CLI target (baked into the hook command by bootstrap)
+        # before anything resolves config paths.
+        from mneme.compat import apply_target_from_argv
+
+        apply_target_from_argv()
+
         # Check hooks version
         _check_hooks_version()
 

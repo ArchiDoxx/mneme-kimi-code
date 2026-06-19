@@ -19,6 +19,10 @@ from mneme.core.extractor import Extractor
 def main() -> None:
     """Handle PostToolUse hook event."""
     try:
+        from mneme.compat import apply_target_from_argv
+
+        apply_target_from_argv()
+
         input_data = json.load(sys.stdin)
 
         extractor = Extractor()
