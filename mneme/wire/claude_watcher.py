@@ -29,8 +29,50 @@ else:
     from watchdog.observers.polling import PollingObserver as PlatformObserver
 
 from mneme.targets import claude_target
-from mneme.wire.claude_transcript import ClaudeTranscriptReader
+from mneme.wire.claude_transcript import ClaudeTranscriptReader, iter_claude_transcripts
 from mneme.wire.indexer import WireIndexer
+
+
+def backfill_claude_transcripts(
+    projects_dir: Path | str, db_path: str | None = None
+) -> dict[str, int]:
+    """Index every saved Claude transcript not already in the database.
+
+    The live :class:`ClaudeProjectsWatcher` only catches transcripts that change
+    while the server runs; this is the startup pass that ingests historical
+    sessions. It is idempotent: a session that already has indexed wire events is
+    skipped, so it is safe to run repeatedly and concurrently with the live
+    watcher (raw ``wire_events`` deduplicate, but ``observations`` do not, so
+    re-indexing a session would otherwise duplicate rows).
+
+    Uses its own :class:`WireIndexer` rather than sharing the watcher's so the
+    background thread never races on the indexer's per-session counters; the
+    SQLite layer is the synchronization point.
+    """
+    indexer = WireIndexer(db_path, queue_structuring=False)
+    indexed = skipped = events = 0
+    for path in iter_claude_transcripts(projects_dir):
+        session_id = path.stem
+        try:
+            if indexer.store.session_has_wire_events(session_id):
+                skipped += 1
+                continue
+            reader = ClaudeTranscriptReader(path, session_id)
+            new_events = reader.read_new_events()
+            if not new_events:
+                continue
+            indexer.store.ensure_session(session_id, reader.cwd)
+            counts = indexer.index_events(new_events)
+            events += sum(counts.values())
+            indexed += 1
+        except Exception:
+            logger.exception(f"Backfill failed for transcript {path}")
+    if indexed or skipped:
+        logger.info(
+            f"Claude backfill: {indexed} sessions indexed, "
+            f"{skipped} already present, {events} events"
+        )
+    return {"sessions": indexed, "skipped": skipped, "events": events}
 
 
 class _TranscriptEventHandler(FileSystemEventHandler):
@@ -55,6 +97,7 @@ class ClaudeProjectsWatcher:
 
     def __init__(self, db_path: str | None = None) -> None:
         self.projects_dir = claude_target().sessions_dir
+        self._db_path = db_path
         self.indexer = WireIndexer(db_path)
         self._readers: dict[str, ClaudeTranscriptReader] = {}
         self._lock = threading.Lock()
@@ -80,6 +123,10 @@ class ClaudeProjectsWatcher:
                 f"ClaudeProjectsWatcher started on {self.projects_dir} "
                 f"(observer: {type(self._observer).__name__})"
             )
+            # One-time backfill of saved transcripts so historical sessions show
+            # up immediately. Idempotent (skips already-indexed sessions) and run
+            # off-thread so it never blocks server startup.
+            threading.Thread(target=self._backfill, daemon=True, name="claude-backfill").start()
         else:
             logger.info(f"Claude projects dir not found: {self.projects_dir}")
 
@@ -90,6 +137,13 @@ class ClaudeProjectsWatcher:
             self._observer.join()
             self._observer = None
             logger.info("ClaudeProjectsWatcher stopped")
+
+    def _backfill(self) -> None:
+        """Index saved transcripts not yet in the DB (runs once, in a thread)."""
+        try:
+            backfill_claude_transcripts(self.projects_dir, self._db_path)
+        except Exception:
+            logger.exception("Claude transcript backfill thread failed")
 
     # ------------------------------------------------------------------
     # Ingestion
@@ -113,9 +167,7 @@ class ClaudeProjectsWatcher:
                 # observations (ON CONFLICT preserves any existing cwd).
                 self.indexer.store.ensure_session(reader.session_id, reader.cwd)
                 counts = self.indexer.index_events(events)
-                logger.debug(
-                    f"Indexed {len(events)} events for {reader.session_id}: {counts}"
-                )
+                logger.debug(f"Indexed {len(events)} events for {reader.session_id}: {counts}")
         except Exception:
             logger.exception(f"Failed to ingest transcript {reader.session_id}")
         finally:

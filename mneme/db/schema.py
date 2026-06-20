@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import sqlite3
+import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar
 
 from loguru import logger
+
+_T = TypeVar("_T")
 
 # ---------------------------------------------------------------------------
 # Migration system
@@ -598,3 +603,30 @@ def get_connection(db_path: str | Path, timeout: float = 30.0) -> sqlite3.Connec
     conn.execute("PRAGMA synchronous = NORMAL")
     conn.execute("PRAGMA busy_timeout = 30000")  # 30 seconds
     return conn
+
+
+def retry_on_locked(fn: Callable[[], _T], *, attempts: int = 8, delay: float = 0.3) -> _T:
+    """Run ``fn`` and retry on transient SQLite "locked"/"busy" errors.
+
+    ``busy_timeout`` already makes writers wait for a held lock, but WAL still
+    returns ``SQLITE_BUSY`` immediately for the write-write upgrade case (a
+    snapshot conflict the busy handler is not invoked for) — surfaced as either
+    "database is locked" or "database is busy". A short bounded retry smooths
+    over that when several writers (live watcher, structuring worker, backfill)
+    hit the DB at once.
+
+    ``fn`` MUST be idempotent — a single statement, or an UPSERT / INSERT-OR-
+    IGNORE. The retry is safe because a statement that raises did not commit, so
+    re-running inserts at most one row; do not wrap multi-statement transactions
+    whose partial effects would double-apply on retry.
+    """
+    for attempt in range(attempts):
+        try:
+            return fn()
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            transient = "locked" in msg or "busy" in msg
+            if not transient or attempt == attempts - 1:
+                raise
+            time.sleep(delay)
+    raise AssertionError("unreachable")  # pragma: no cover

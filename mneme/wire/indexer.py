@@ -20,8 +20,13 @@ from mneme.wire.models import (
 class WireIndexer:
     """Consume wire events and persist them to the database."""
 
-    def __init__(self, db_path: str | None = None) -> None:
+    def __init__(self, db_path: str | None = None, *, queue_structuring: bool = True) -> None:
         self.store = WireStore(db_path)
+        # When False, observations are not queued for background AI structuring.
+        # Used by the bulk historical backfill so it does not flood the live
+        # structuring queue (and the worker's competing DB writes) with thousands
+        # of old observations.
+        self._queue_structuring = queue_structuring
         # Runtime counters per session for turn/step tracking
         self._turns: dict[str, int] = {}
         self._steps: dict[str, int] = {}
@@ -39,25 +44,13 @@ class WireIndexer:
     def _index_single(self, evt: WireEvent) -> None:
         sid = evt.session_id
 
-        # Track turn / step numbers
+        # Track turn / step numbers. Counters run for EVERY event (including
+        # replays) so newly-stored events get correct turn/step numbers.
         match evt:
             case TurnBeginEvent():
                 self._turns[sid] = self._turns.get(sid, 0) + 1
                 self._steps[sid] = 0  # reset steps on new turn
                 self.store.ensure_session(sid)
-                # Also store prompt as observation for backward compat
-                prompt_text = _extract_prompt_text(evt)
-                if prompt_text:
-                    cwd = self.store.get_session_cwd(sid)
-                    self.store.add_observation_from_wire(
-                        session_id=sid,
-                        event_type="UserPromptSubmit",
-                        prompt=prompt_text,
-                        turn_number=self._turns.get(sid),
-                        step_number=0,
-                        timestamp=evt.timestamp,
-                        cwd=cwd,
-                    )
             case _ if hasattr(evt, "step_number") and evt.step_number:
                 self._steps[sid] = max(self._steps.get(sid, 0), evt.step_number)
             case _ if evt.event_type == "StepBegin":
@@ -74,17 +67,39 @@ class WireIndexer:
         if step_n is not None:
             object.__setattr__(evt, "step_number", step_n)
 
-        # Persist raw event
-        self.store.add_wire_event(evt)
+        # Persist raw event. wire_events dedupe on (session_id, timestamp,
+        # event_type), so is_new is False when this exact event is already
+        # stored. Derived rows (observations, thinking, stats) have no such
+        # unique key — creating them only for NEW wire events keeps re-indexing
+        # idempotent (restart re-reads, or a backfill racing the live watcher on
+        # the same session) instead of duplicating observations.
+        is_new = self.store.add_wire_event(evt)
 
-        # Typed storage
+        # Typed storage — row creation is gated on is_new; the in-memory
+        # tool-call cache must update regardless so ToolResults pair correctly
+        # within this run even when the events themselves are replays.
         match evt:
+            case TurnBeginEvent():
+                # Also store the prompt as an observation for backward compat.
+                prompt_text = _extract_prompt_text(evt)
+                if is_new and prompt_text:
+                    self.store.add_observation_from_wire(
+                        session_id=sid,
+                        event_type="UserPromptSubmit",
+                        prompt=prompt_text,
+                        turn_number=turn_n,
+                        step_number=0,
+                        timestamp=evt.timestamp,
+                        cwd=self.store.get_session_cwd(sid),
+                        queue_structuring=self._queue_structuring,
+                    )
             case StatusUpdateEvent():
-                self.store.add_session_stat(evt)
+                if is_new:
+                    self.store.add_session_stat(evt)
             case ContentPartEvent():
-                if evt.think:
+                if is_new and evt.think:
                     self.store.add_thinking(evt)
-                if evt.text:
+                if is_new and evt.text:
                     self.store.add_assistant_message(evt)
             case ToolCallEvent():
                 # Cache tool call info for pairing with ToolResult
@@ -95,35 +110,20 @@ class WireIndexer:
                 }
             case ToolResultEvent():
                 self.store.ensure_session(sid)
-                out = _normalize_output(evt.output)
-                # Look up paired ToolCall for name/input
+                # Pop the paired ToolCall regardless so the cache stays correct.
                 tool_info = self._tool_calls.get(sid, {}).pop(evt.tool_call_id, {})
-                tool_name = tool_info.get("name")
-                tool_input = tool_info.get("arguments")
-                cwd = self.store.get_session_cwd(sid)
-                if evt.is_error:
+                if is_new:
                     self.store.add_observation_from_wire(
                         session_id=sid,
-                        event_type="PostToolUseFailure",
-                        tool_name=tool_name,
-                        tool_input=tool_input,
-                        tool_output=out,
+                        event_type="PostToolUseFailure" if evt.is_error else "PostToolUse",
+                        tool_name=tool_info.get("name"),
+                        tool_input=tool_info.get("arguments"),
+                        tool_output=_normalize_output(evt.output),
                         turn_number=turn_n,
                         step_number=step_n,
                         timestamp=evt.timestamp,
-                        cwd=cwd,
-                    )
-                else:
-                    self.store.add_observation_from_wire(
-                        session_id=sid,
-                        event_type="PostToolUse",
-                        tool_name=tool_name,
-                        tool_input=tool_input,
-                        tool_output=out,
-                        turn_number=turn_n,
-                        step_number=step_n,
-                        timestamp=evt.timestamp,
-                        cwd=cwd,
+                        cwd=self.store.get_session_cwd(sid),
+                        queue_structuring=self._queue_structuring,
                     )
 
     def index_state(self, state: SessionState | None) -> None:

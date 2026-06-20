@@ -26,12 +26,58 @@ else:
 
 from mneme.wire.indexer import WireIndexer
 from mneme.wire.reader import (
-    SessionIdentity,
     SessionReader,
     iter_session_wires,
     load_workdir_map,
     resolve_session_identity,
 )
+
+
+def backfill_kimi_sessions(
+    sessions_dir: Path | str,
+    workdir_map: dict[str, str] | None = None,
+    db_path: str | None = None,
+) -> dict[str, int]:
+    """Index every saved Kimi session not already in the database.
+
+    The live :class:`SessionWatcher` only catches wire files that change while
+    the server runs; this is the startup pass that ingests historical sessions.
+    It is idempotent: a session that already has indexed wire events is skipped,
+    so it is safe to run repeatedly and concurrently with the live watcher (raw
+    ``wire_events`` deduplicate, but ``observations`` do not, so re-indexing a
+    session would otherwise duplicate rows). Mirrors
+    :func:`mneme.wire.claude_watcher.backfill_claude_transcripts`.
+
+    Uses its own :class:`WireIndexer` (with structuring queueing disabled) so the
+    background thread neither races on the live indexer's per-session counters
+    nor floods the structuring queue with thousands of old observations.
+    """
+    if workdir_map is None:
+        workdir_map = load_workdir_map()
+    indexer = WireIndexer(db_path, queue_structuring=False)
+    indexed = skipped = events = 0
+    for identity in iter_session_wires(sessions_dir, workdir_map):
+        sid = identity.session_id
+        try:
+            if indexer.store.session_has_wire_events(sid):
+                skipped += 1
+                continue
+            reader = SessionReader(identity.session_dir, sid, wire_path=identity.wire_path)
+            new_events = reader.read_new_events()
+            if not new_events:
+                continue
+            indexer.store.ensure_session(sid, identity.cwd)
+            counts = indexer.index_events(new_events)
+            indexer.index_state(reader.read_state())
+            events += sum(counts.values())
+            indexed += 1
+        except Exception:
+            logger.exception(f"Backfill failed for Kimi session {sid}")
+    if indexed or skipped:
+        logger.info(
+            f"Kimi backfill: {indexed} sessions indexed, {skipped} already present, {events} events"
+        )
+    return {"sessions": indexed, "skipped": skipped, "events": events}
 
 
 class _WireEventHandler(FileSystemEventHandler):
@@ -97,6 +143,7 @@ class SessionWatcher:
 
     def __init__(self, db_path: str | None = None) -> None:
         self.sessions_dir = Path.home() / ".kimi-code" / "sessions"
+        self._db_path = db_path
         self.indexer = WireIndexer(db_path)
         self._readers: dict[str, SessionReader] = {}
         self._lock = threading.Lock()
@@ -126,11 +173,10 @@ class SessionWatcher:
                 f"SessionWatcher started on {self.sessions_dir} "
                 f"(observer: {type(self._observer).__name__})"
             )
-            # NOTE: Background scan disabled by default. It causes server
-            # instability on large databases (40k+ observations). Sessions
-            # are indexed lazily when accessed via API or when new wire
-            # events arrive via the filesystem watcher.
-            # threading.Thread(target=self._scan_all, daemon=True).start()
+            # One-time backfill of saved sessions so historical sessions show up
+            # immediately. Idempotent (skips already-indexed sessions) and run
+            # off-thread so it never blocks server startup.
+            threading.Thread(target=self._backfill, daemon=True, name="kimi-backfill").start()
 
     def stop(self) -> None:
         """Stop watching."""
@@ -145,61 +191,14 @@ class SessionWatcher:
     # Discovery
     # ------------------------------------------------------------------
 
-    def _scan_all(self) -> None:
-        """Scan recent existing sessions on startup (lazy — skips old sessions)."""
-        import time
-
-        logger.info("Starting background scan of recent sessions...")
+    def _backfill(self) -> None:
+        """Index saved sessions not yet in the DB (runs once, in a thread)."""
         try:
-            if not self.sessions_dir.exists():
-                logger.info("Sessions directory does not exist, skipping scan")
-                return
-
-            # Only scan sessions modified in the last 7 days to avoid
-            # blocking startup with huge historical backlogs.
-            cutoff = time.time() - (7 * 24 * 3600)
-            count = 0
-            skipped = 0
-            self._workdir_map = load_workdir_map()
-
-            for identity in iter_session_wires(self.sessions_dir, self._workdir_map):
-                try:
-                    if identity.wire_path.stat().st_mtime < cutoff:
-                        skipped += 1
-                        continue
-                except OSError:
-                    pass
-                try:
-                    self._register_session(identity)
-                    count += 1
-                except Exception:
-                    logger.exception(f"Failed to register session {identity.session_id}")
-
-            logger.info(
-                f"Background scan complete: {count} sessions registered, "
-                f"{skipped} old sessions skipped (cutoff: 7 days)"
-            )
+            # Load the workdir map fresh (not the copy captured at __init__) so
+            # cwds written to session_index.jsonl shortly before startup are seen.
+            backfill_kimi_sessions(self.sessions_dir, None, self._db_path)
         except Exception:
-            logger.exception("Background scan failed")
-
-    def _is_session_dir(self, path: Path) -> bool:
-        """Check if path looks like a session directory."""
-        return path.is_dir() and (path / "wire.jsonl").exists()
-
-    def _register_session(self, identity: SessionIdentity) -> None:
-        """Register a resolved session and do an initial read."""
-        with self._lock:
-            if identity.session_id in self._readers:
-                return
-            reader = SessionReader(
-                identity.session_dir, identity.session_id, wire_path=identity.wire_path
-            )
-            self._readers[identity.session_id] = reader
-
-        self.indexer.store.ensure_session(identity.session_id, identity.cwd)
-        # Initial ingestion
-        self._ingest(reader)
-        logger.debug(f"Registered session {identity.session_id} (cwd={identity.cwd})")
+            logger.exception("Kimi session backfill thread failed")
 
     # ------------------------------------------------------------------
     # Ingestion

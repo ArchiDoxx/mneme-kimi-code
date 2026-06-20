@@ -26,6 +26,10 @@ Tests: tests/test_worker.py
 from __future__ import annotations
 
 import asyncio
+import functools
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, TypeVar
 
 from loguru import logger
 
@@ -33,6 +37,8 @@ from mneme.config import load_config
 from mneme.core.ai_provider import ConfigurableAIProvider, HybridProvider
 from mneme.db.store import ObservationStore
 from mneme.db.structured_store import StructuredObservationStore
+
+_T = TypeVar("_T")
 
 
 def _build_ai_provider_from_config(config: dict) -> ConfigurableAIProvider:
@@ -75,6 +81,16 @@ class StructuringWorker:
         self.interval = interval or struct_cfg.get("worker_interval_seconds", 5)
         self.batch_size = struct_cfg.get("batch_size", 5)
         self.max_retry = struct_cfg.get("max_retry_count", 3)
+        # Single worker thread for all blocking DB calls: keeps them off the
+        # event loop while guaranteeing every call (and the per-batch
+        # connection close) runs on the SAME thread, so the stores' thread-local
+        # SQLite connections are reused and released deterministically.
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mneme-worker-db")
+
+    async def _run_db(self, fn: Callable[..., _T], *args: Any, **kwargs: Any) -> _T:
+        """Run a blocking store call on the dedicated worker DB thread."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self._executor, functools.partial(fn, *args, **kwargs))
 
     async def start(self) -> None:
         """Start the worker loop."""
@@ -98,18 +114,27 @@ class StructuringWorker:
     def stop(self) -> None:
         """Stop the worker."""
         self.running = False
+        self._executor.shutdown(wait=False)
         logger.info("Structuring worker stopped")
 
     async def _process_batch(self, limit: int | None = None) -> None:
-        """Process a batch of pending observations."""
+        """Process a batch of pending observations.
+
+        All blocking SQLite calls are dispatched via ``asyncio.to_thread`` so a
+        contended write (which can wait up to the connection ``busy_timeout``)
+        never blocks the server's event loop — otherwise the whole web UI freezes
+        while the worker waits on a lock.
+        """
         limit = limit or self.batch_size
-        messages = self.store.claim_pending_messages(limit=limit, message_type="observation")
+        messages = await self._run_db(
+            self.store.claim_pending_messages, limit=limit, message_type="observation"
+        )
 
         for msg in messages:
             # Skip if exceeded max retries
             if msg.get("retry_count", 0) >= self.max_retry:
                 logger.warning(f"Message {msg['id']} exceeded max retries, marking failed")
-                self.store.mark_message_failed(msg["id"])
+                await self._run_db(self.store.mark_message_failed, msg["id"])
                 continue
 
             try:
@@ -121,7 +146,8 @@ class StructuringWorker:
                 )
 
                 if result and not result.skip:
-                    self.structured_store.add_structured(
+                    await self._run_db(
+                        self.structured_store.add_structured,
                         result,
                         session_id=msg["session_id"],
                         project=self._extract_project(msg.get("cwd", "")),
@@ -130,14 +156,14 @@ class StructuringWorker:
                         model=result.source,
                     )
 
-                self.store.mark_message_processed(msg["id"])
+                await self._run_db(self.store.mark_message_processed, msg["id"])
 
             except Exception as e:
                 logger.error(f"Failed to structure message {msg['id']}: {e}")
-                self.store.mark_message_failed(msg["id"])
+                await self._run_db(self.store.mark_message_failed, msg["id"])
 
         # Release connections to prevent DB locking between batches
-        self.structured_store.close()
+        await self._run_db(self.structured_store.close)
         try:
             from mneme.db.vector import SQLiteVecStore
 
