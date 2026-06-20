@@ -50,19 +50,41 @@
 
 Die **Volltextsuche (FTS5)** funktioniert immer und ohne Zusatzpakete. Die
 **semantische** Suche (`/api/semantic_search`, `/api/vector_search`,
-`mneme search --semantic`) braucht echte Embeddings — installiere dafür das
-`embeddings`-Extra:
+`mneme search --semantic`) nutzt Embeddings, die du **abgestuft** wählst über
+`vector.embedding_backend` in der Config — jede höhere Stufe fällt automatisch
+auf die `hash`-Stufe zurück, falls Abhängigkeit/Config fehlen (Suche bricht nie):
 
-```bash
-pip install 'mneme-kimi-code[embeddings]'     # bzw. beim Git/Source-Install mit [embeddings]
+| Stufe | `embedding_backend` | Setup | Qualität |
+|---|---|---|---|
+| **Hash** (Default) | `"hash"` | keine — deterministische Hash-Embeddings | nur exakte/ähnliche Strings, **nicht** semantisch |
+| **Local** | `"local"` | `pip install 'mneme-kimi-code[embeddings]'` (sentence-transformers) | gut, offline |
+| **API** | `"api"` | OpenAI-kompatibler `/embeddings`-Endpoint (mixedbread, OpenAI, lokaler Server) | sehr gut |
+
+```jsonc
+// ~/.kimi-code/mneme/config.json  (bzw. ~/.claude/mneme/config.json)
+"vector": {
+  "embedding_backend": "local",
+  "embedding_model": "mixedbread-ai/mxbai-embed-large-v1",
+  "embedding_dim": 1024          // muss zum Modell passen (all-MiniLM = 384)
+}
+// oder API:
+"vector": {
+  "embedding_backend": "api",
+  "embedding_api_base": "https://api.mixedbread.com/v1",
+  "embedding_api_model": "mixedbread-ai/mxbai-embed-large-v1",
+  "embedding_api_key": "...",    // oder env MNEME_EMBEDDING_API_KEY
+  "embedding_dim": 1024
+}
 ```
 
-Ohne `sentence-transformers` fällt der Vektor-Store auf **deterministische
-Dummy-Embeddings** zurück: Aufrufe funktionieren, liefern aber keine semantisch
-sinnvollen Treffer. Außerdem operiert semantische Suche über die **KI-/heuristisch
-strukturierten** Beobachtungen — frisch per Auto-Backfill eingespeiste Historie
-wird nicht automatisch strukturiert; das holst du bei Bedarf mit `mneme structure`
-nach (heuristisch ohne API-Key, KI-gestützt mit API-Key).
+> **Wichtig:** Die vec0-Dimension wird beim Anlegen fixiert. Wenn du `embedding_dim`
+> (also das Modell) änderst, **setze den Vektor-Index zurück** (`mneme reset`),
+> sonst passen alte und neue Vektoren nicht zusammen.
+
+Semantische Suche operiert über die **KI-/heuristisch strukturierten** Beobachtungen
+— frisch per Auto-Backfill eingespeiste Historie wird nicht automatisch
+strukturiert; das holst du bei Bedarf mit `mneme structure` nach (heuristisch ohne
+API-Key, KI-gestützt mit API-Key).
 
 ---
 

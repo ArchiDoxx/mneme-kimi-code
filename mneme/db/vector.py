@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 import sqlite3
 import threading
+import urllib.request
 from typing import Any
 
 import numpy as np
@@ -14,15 +17,20 @@ from mneme.config import load_config
 from mneme.db.schema import get_connection
 
 # ---------------------------------------------------------------------------
-# Embedding helper
+# Embedding backends — tiered: hash (default) | local | api
 # ---------------------------------------------------------------------------
 
-# Dimensionality for fallback dummy embeddings (matches all-MiniLM-L6-v2)
-_FALLBACK_EMBEDDING_DIM = 384
+# Default dimensionality (matches all-MiniLM-L6-v2 and the hash fallback).
+_DEFAULT_EMBEDDING_DIM = 384
+
+
+def _embedding_dim() -> int:
+    """Configured embedding dimension (vec0 tables + hash fallback use this)."""
+    return int(load_config()["vector"].get("embedding_dim", _DEFAULT_EMBEDDING_DIM))
 
 
 class _EmbeddingCache:
-    """Lazy-loaded sentence-transformers model with caching."""
+    """Lazy-loaded sentence-transformers model with caching (the 'local' tier)."""
 
     _instance: _EmbeddingCache | None = None
     _lock = threading.Lock()
@@ -51,9 +59,9 @@ class _EmbeddingCache:
         if self._model is None or self._model_name != model_name:
             if not self._check_sentence_transformers():
                 logger.warning(
-                    "sentence-transformers not installed. "
-                    "Using deterministic dummy embeddings. "
-                    "Install with: pip install 'kimi-mneme[embeddings]'"
+                    "embedding_backend='local' but sentence-transformers is not "
+                    "installed — falling back to hash embeddings. Install with: "
+                    "pip install 'mneme-kimi-code[embeddings]'"
                 )
                 return None
             from sentence_transformers import SentenceTransformer
@@ -63,29 +71,25 @@ class _EmbeddingCache:
             logger.debug(f"Loaded embedding model: {model_name}")
         return self._model
 
-    def encode(self, texts: list[str], model_name: str) -> np.ndarray:
+    def encode_local(self, texts: list[str], model_name: str) -> np.ndarray | None:
+        """Encode via sentence-transformers, or None if it is unavailable."""
         model = self._load(model_name)
-        if model is not None:
-            return model.encode(texts, convert_to_numpy=True, normalize_embeddings=True)
-        # Fallback: deterministic dummy embeddings for CI/testing
-        return _dummy_embeddings(texts)
+        if model is None:
+            return None
+        return model.encode(texts, convert_to_numpy=True, normalize_embeddings=True)
 
 
-def _dummy_embeddings(texts: list[str]) -> np.ndarray:
-    """Generate deterministic normalized embeddings without ML libraries.
+def _dummy_embeddings(texts: list[str], dim: int) -> np.ndarray:
+    """Deterministic normalized embeddings without ML libraries (the 'hash' tier).
 
-    Uses SHA-256 hashing to produce consistent pseudo-random vectors.
-    Suitable for testing and CI where sentence-transformers is too heavy.
+    Uses SHA-256 hashing to produce consistent pseudo-random vectors. Offline and
+    dependency-free, but NOT semantically meaningful — only equal texts match.
     """
-    embeddings = np.zeros((len(texts), _FALLBACK_EMBEDDING_DIM), dtype=np.float32)
+    embeddings = np.zeros((len(texts), dim), dtype=np.float32)
     for i, text in enumerate(texts):
-        # Deterministic seed from text content
         seed = hashlib.sha256(text.encode("utf-8")).digest()
-        # Use seed bytes to fill the vector
         vec = np.frombuffer(seed, dtype=np.uint8).astype(np.float32)
-        # Expand to 384 dims by repeating and slicing
-        vec = np.resize(vec, _FALLBACK_EMBEDDING_DIM)
-        # Normalize to unit length
+        vec = np.resize(vec, dim)
         norm = np.linalg.norm(vec)
         if norm > 0:
             vec = vec / norm
@@ -93,12 +97,63 @@ def _dummy_embeddings(texts: list[str]) -> np.ndarray:
     return embeddings
 
 
+def _api_embeddings(texts: list[str], cfg: dict[str, Any]) -> np.ndarray | None:
+    """Encode via an OpenAI-compatible /embeddings endpoint (the 'api' tier).
+
+    Works with mixedbread, OpenAI, or any compatible server. Returns None on any
+    failure so the caller can degrade to hash embeddings instead of erroring.
+    """
+    base = cfg.get("embedding_api_base")
+    model = cfg.get("embedding_api_model") or cfg.get("embedding_model")
+    key = cfg.get("embedding_api_key") or os.getenv("MNEME_EMBEDDING_API_KEY")
+    if not base or not model:
+        logger.warning(
+            "embedding_backend='api' but embedding_api_base/model are unset — "
+            "falling back to hash embeddings."
+        )
+        return None
+    url = base.rstrip("/") + "/embeddings"
+    body = json.dumps({"model": model, "input": texts}).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    req = urllib.request.Request(url, data=body, headers=headers)  # noqa: S310
+    try:
+        timeout = float(cfg.get("embedding_api_timeout", 30.0))
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+            payload = json.loads(resp.read().decode("utf-8"))
+        # Order by `index` — OpenAI-compatible APIs don't guarantee response order.
+        items = sorted(payload["data"], key=lambda it: it.get("index", 0))
+        vectors = [item["embedding"] for item in items]
+        arr = np.asarray(vectors, dtype=np.float32)
+        norms = np.linalg.norm(arr, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        return arr / norms
+    except Exception as e:  # network / shape / auth — degrade gracefully
+        logger.warning(f"Embedding API call failed ({e}); falling back to hash embeddings.")
+        return None
+
+
 def _encode_texts(texts: list[str], model_name: str | None = None) -> np.ndarray:
-    """Encode texts to normalized float32 embeddings."""
-    config = load_config()
-    model = model_name or config["vector"]["embedding_model"]
-    cache = _EmbeddingCache()
-    return cache.encode(texts, model)
+    """Encode texts to normalized float32 embeddings per the configured backend.
+
+    Tiers (config ``vector.embedding_backend``): ``local`` and ``api`` fall back
+    to ``hash`` when their dependency/config is missing, so search never errors.
+    """
+    cfg = load_config()["vector"]
+    backend = cfg.get("embedding_backend", "hash")
+    dim = int(cfg.get("embedding_dim", _DEFAULT_EMBEDDING_DIM))
+
+    if backend == "local":
+        arr = _EmbeddingCache().encode_local(texts, model_name or cfg["embedding_model"])
+        if arr is not None:
+            return arr
+    elif backend == "api":
+        arr = _api_embeddings(texts, cfg)
+        if arr is not None:
+            return arr
+
+    return _dummy_embeddings(texts, dim)
 
 
 def _numpy_to_blob(embedding: np.ndarray) -> bytes:
@@ -256,31 +311,37 @@ class SQLiteVecStore:
                     cls._vec_available = False
 
     def _ensure_vec_tables(self, conn: sqlite3.Connection) -> None:
-        """Create vec0 virtual tables if they don't exist."""
+        """Create vec0 virtual tables if they don't exist.
+
+        The embedding dimension comes from config (``vector.embedding_dim``); the
+        vec0 dim is fixed at create time, so switching to a different-dim model
+        (e.g. mixedbread mxbai-embed-large, 1024) requires resetting these tables.
+        """
         import sqlite3
 
+        dim = _embedding_dim()
         tables = {
-            "vec_title": """
+            "vec_title": f"""
                 CREATE VIRTUAL TABLE IF NOT EXISTS vec_title USING vec0(
-                    embedding float[384],
+                    embedding float[{dim}],
                     +structured_id INTEGER,
                     +session_id TEXT,
                     +project TEXT,
                     partition_key TEXT
                 )
             """,
-            "vec_narrative": """
+            "vec_narrative": f"""
                 CREATE VIRTUAL TABLE IF NOT EXISTS vec_narrative USING vec0(
-                    embedding float[384],
+                    embedding float[{dim}],
                     +structured_id INTEGER,
                     +session_id TEXT,
                     +project TEXT,
                     partition_key TEXT
                 )
             """,
-            "vec_facts": """
+            "vec_facts": f"""
                 CREATE VIRTUAL TABLE IF NOT EXISTS vec_facts USING vec0(
-                    embedding float[384],
+                    embedding float[{dim}],
                     +structured_id INTEGER,
                     +session_id TEXT,
                     +project TEXT,
@@ -288,9 +349,9 @@ class SQLiteVecStore:
                     partition_key TEXT
                 )
             """,
-            "vec_raw_observations": """
+            "vec_raw_observations": f"""
                 CREATE VIRTUAL TABLE IF NOT EXISTS vec_raw_observations USING vec0(
-                    embedding float[384],
+                    embedding float[{dim}],
                     +observation_id INTEGER,
                     +session_id TEXT,
                     +event_type TEXT,

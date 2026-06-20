@@ -20,7 +20,25 @@ DEFAULT_CONFIG = {
     },
     "vector": {
         "path": "~/.kimi-code/mneme/chroma",
+        # Embedding backend tier (semantic search quality vs. dependencies):
+        #   "hash"  — deterministic hash embeddings, no extra deps (default).
+        #             Cheap and offline, but NOT semantically meaningful.
+        #   "local" — sentence-transformers model (needs the `embeddings` extra).
+        #             Default model is all-MiniLM-L6-v2 (384-dim); for higher
+        #             quality set embedding_model to a mixedbread model, e.g.
+        #             "mixedbread-ai/mxbai-embed-large-v1" + embedding_dim 1024.
+        #   "api"   — OpenAI-compatible /embeddings endpoint (mixedbread, OpenAI,
+        #             a local server, ...). Set embedding_api_base/_key/_model.
+        # Changing the backend/dimension after data is embedded requires
+        # resetting the vector tables (the vec0 dim is fixed at create time).
+        "embedding_backend": "hash",
         "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+        "embedding_dim": 384,
+        # API backend (used only when embedding_backend == "api"):
+        "embedding_api_base": None,  # e.g. "https://api.mixedbread.com/v1"
+        "embedding_api_key": None,  # or env MNEME_EMBEDDING_API_KEY
+        "embedding_api_model": None,  # e.g. "mixedbread-ai/mxbai-embed-large-v1"
+        "embedding_api_timeout": 30.0,
         "chunk_size": 512,
         "chunk_overlap": 50,
     },
