@@ -13,7 +13,7 @@ from mneme.compat import fix_windows_encoding
 
 fix_windows_encoding()
 
-from mneme.db.store import ObservationStore
+from mneme.core.query import SearchService
 
 
 def main() -> None:
@@ -22,35 +22,7 @@ def main() -> None:
         params = json.load(sys.stdin)
 
         ids = params.get("ids", [])
-        if not ids:
-            print(json.dumps({"observations": []}, ensure_ascii=False))
-            return
-
-        store = ObservationStore()
-        observations = store.get_observations(ids)
-
-        # Format full output
-        full_observations = []
-        for obs in observations:
-            full_obs = {
-                "id": obs["id"],
-                "session_id": obs["session_id"],
-                "timestamp": obs["created_at"],
-                "type": obs["event_type"],
-                "tool_name": obs.get("tool_name"),
-                "tool_input": obs.get("tool_input"),
-                "tool_output": obs.get("tool_output"),
-                "error": obs.get("error"),
-                "file_path": obs.get("file_path"),
-                "prompt": obs.get("prompt"),
-                "agent_name": obs.get("agent_name"),
-            }
-            full_observations.append(full_obs)
-
-        output = {
-            "observations": full_observations,
-            "count": len(full_observations),
-        }
+        output = SearchService().get_observations(ids)
 
         print(json.dumps(output, ensure_ascii=False, indent=2))
 

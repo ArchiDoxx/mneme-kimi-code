@@ -89,77 +89,23 @@ def _maybe_structure_pending() -> None:
 def memory_search(query: str, limit: int = 10) -> dict[str, Any]:
     """Search memory index with full-text queries.
 
-    Searches across BOTH structured observations (AI-compressed) and raw
-    observations (full tool calls). Returns structured results first, then
-    raw observations as fallback.
+    Delegates to the shared SearchService so results match the CLI and Kimi
+    plugin exactly. Searches structured observations (AI-compressed), raw
+    observations (full tool calls), and wire events. Semantic search is left
+    to the dedicated `memory_semantic_search` tool to keep this fast.
 
     Args:
         query: Search query (supports FTS5 syntax).
         limit: Maximum results to return.
 
     Returns:
-        Dict with 'results' list and 'total' count.
+        Dict with 'results' (canonical result dicts), 'total', 'query', and a
+        per-source 'sources' breakdown.
     """
     _maybe_structure_pending()
-    from mneme.db.store import ObservationStore
+    from mneme.core.query import SearchService
 
-    # 1. Search structured observations
-    structured_store = StructuredObservationStore()
-    structured_results = structured_store.search_fts(query, limit=limit)
-
-    # 2. Search raw observations (fallback for unstructured data)
-    raw_store = ObservationStore()
-    raw_results = raw_store.search(query=query, limit=limit)
-
-    # Combine: structured first, then raw
-    combined = []
-    seen_ids = set()
-
-    for r in structured_results:
-        combined.append(
-            {
-                "id": f"structured_{r['id']}",
-                "type": r.get("type", "structured"),
-                "title": r.get("title", ""),
-                "content": r.get("narrative", ""),
-                "source": "structured",
-                "session_id": r.get("session_id", ""),
-                "created_at": r.get("created_at"),
-            }
-        )
-        seen_ids.add(r.get("id"))
-
-    for r in raw_results:
-        raw_id = r.get("id")
-        if raw_id not in seen_ids:
-            snippet = r.get("snippet") or ""
-            if not snippet:
-                snippet = (
-                    " | ".join(
-                        str(s)
-                        for s in [
-                            r.get("prompt"),
-                            r.get("tool_output"),
-                            r.get("error"),
-                            r.get("tool_name"),
-                        ]
-                        if s
-                    )
-                    or "(no preview)"
-                )
-            combined.append(
-                {
-                    "id": f"raw_{raw_id}",
-                    "type": r.get("event_type", "raw"),
-                    "title": r.get("tool_name") or "Unknown",
-                    "content": snippet[:200],
-                    "source": "raw",
-                    "session_id": r.get("session_id", ""),
-                    "created_at": r.get("created_at"),
-                }
-            )
-
-    return {"results": combined[:limit], "total": len(combined[:limit]), "query": query}
+    return SearchService().search(query, limit=limit, semantic=False)
 
 
 @mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": True})
