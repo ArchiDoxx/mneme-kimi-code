@@ -1,6 +1,7 @@
 # mneme-kimi-code — Persistent Memory for Kimi Code CLI **& Claude Code**
 
-[![PyPI](https://img.shields.io/pypi/v/mneme-kimi-code.svg?style=flat)](https://pypi.org/project/mneme-kimi-code/)
+[![Install](https://img.shields.io/badge/install-from%20GitHub-blue.svg)](#installation)
+[![PyPI](https://img.shields.io/badge/PyPI-not%20yet%20published-lightgrey.svg)](#installation)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
 [![Kimi CLI](https://img.shields.io/badge/Kimi%20Code%20CLI-supported-orange.svg)](https://moonshotai.github.io/kimi-cli/)
@@ -110,47 +111,54 @@ mneme-kimi-code ist so konzipiert, dass es **vollständig offline** funktioniert
 
 ### Prerequisites
 
-- **sqlite3 CLI**: Benötigt für Datenbank-Inspektion und interne Operationen. Installiere via System-Paketmanager (`apt install sqlite3`, `brew install sqlite3`, `winget install SQLite.SQLite`, etc.)
+- **Python 3.10+**
+- **[`uv`](https://docs.astral.sh/uv/)** (empfohlen) oder **`pip`**
+- Mindestens eine Host-CLI: **[Kimi Code CLI](https://moonshotai.github.io/kimi-cli/)** oder **[Claude Code](https://docs.claude.com/en/docs/claude-code)**
+- *(optional)* **`sqlite3` CLI** — nur falls du die DB von Hand inspizieren willst. mneme selbst **braucht es nicht**: intern werden Pythons `sqlite3`-Modul + `sqlite-vec` verwendet, kein externes Binary.
 
 ### Installation
 
-Empfohlen wird die Installation mit **`uv`**. `pip` funktioniert als Fallback.
+> **Status:** Das Paket ist **noch nicht auf PyPI** veröffentlicht. Die Installation läuft direkt aus dem GitHub-Repo — ein einziger Befehl, **kein Clone nötig**.
 
-#### Option 1: `uvx` (one-shot, kein dauerhaftes Install)
-
-```bash
-uvx --from mneme-kimi-code mneme bootstrap
-```
-
-#### Option 2: `uv tool install` (empfohlen — globale Installation)
+#### Empfohlen: `uv` (ein Befehl, global)
 
 ```bash
-uv tool install mneme-kimi-code
-mneme bootstrap
+uv tool install git+https://github.com/ArchiDoxx/mneme-kimi-code.git
+mneme bootstrap --target claude     # oder: --target kimi   |   weglassen = auto-detect
 ```
 
-Updates später:
+Falls danach `mneme` als „command not found" gemeldet wird, liegt der uv-Bin-Ordner noch nicht im `PATH`:
 
 ```bash
-uv tool upgrade mneme-kimi-code
-mneme bootstrap
+uv tool update-shell                # fügt ~/.local/bin (Windows: %USERPROFILE%\.local\bin) zum PATH hinzu
+# danach ein NEUES Terminal öffnen, dann erneut: mneme bootstrap --target claude
 ```
 
-#### Option 3: `pip` (Fallback)
+Später updaten:
 
 ```bash
-pip install mneme-kimi-code
-mneme bootstrap
+uv tool install git+https://github.com/ArchiDoxx/mneme-kimi-code.git --force
 ```
 
-Updates später:
+#### Alternative: `pip`
 
 ```bash
-pip install --upgrade mneme-kimi-code
-mneme bootstrap
+pip install git+https://github.com/ArchiDoxx/mneme-kimi-code.git
+mneme bootstrap --target claude
 ```
 
-> **Hinweis:** `pip install --user` installiert unter `~/.local/bin` (Linux/macOS) oder `%APPDATA%\Python\Scripts` (Windows). Stelle sicher, dass dieses Verzeichnis in deinem `PATH` liegt.
+> `pip install --user` legt `mneme` unter `~/.local/bin` (Linux/macOS) bzw. `%APPDATA%\Python\Scripts` (Windows) ab — dieses Verzeichnis muss im `PATH` liegen.
+
+#### Aus lokalem Clone (für Entwicklung)
+
+```bash
+git clone https://github.com/ArchiDoxx/mneme-kimi-code.git
+cd mneme-kimi-code
+uv tool install .                   # der PUNKT = lokale Quelle (NICHT der Paketname)
+mneme bootstrap --target claude
+```
+
+> ⚠️ **Wichtig:** `uv tool install mneme-kimi-code` / `pip install mneme-kimi-code` (nur der Name) funktionieren **noch nicht** — das Paket liegt noch nicht auf PyPI. Nutze die `git+https://…`- oder `.`-Varianten oben. Sobald veröffentlicht, wird `uv tool install mneme-kimi-code` der Standardweg.
 
 ### Host-CLI wählen: Kimi Code CLI **oder** Claude Code
 
@@ -201,16 +209,11 @@ Ein `kimi plugin install`-Schritt ist weder nötig noch möglich. `mneme bootstr
 
 > **One command = fully configured.** Kein manuelles Setup nötig.
 
-> **Recommended:** Installiere `sqlite3` CLI für Datenbank-Inspektion und interne Operationen:
+> **Optional:** Für manuelle DB-Inspektion kannst du die `sqlite3` CLI installieren (mneme selbst braucht sie nicht — `mneme sql` nutzt Pythons eingebautes `sqlite3`):
 > ```bash
-> # Linux (Debian/Ubuntu)
-> apt install sqlite3
->
-> # macOS
-> brew install sqlite3
->
-> # Windows
-> winget install SQLite.SQLite
+> apt install sqlite3            # Linux (Debian/Ubuntu)
+> brew install sqlite3           # macOS
+> winget install SQLite.SQLite   # Windows
 > ```
 
 ### Use your CLI normally
@@ -418,8 +421,9 @@ Dies merged mit der globalen Config (Projekt-Werte überschreiben globale).
 ## Requirements
 
 - **Python**: 3.10+
+- **uv** (empfohlen) oder **pip** — Installation direkt aus GitHub (PyPI-Release in Vorbereitung)
 - **Host CLI** (mindestens eine): **Kimi Code CLI** 1.41+ **oder** **Claude Code**
-- **sqlite3 CLI**: Benötigt für Datenbank-Inspektion und interne Operationen. Installiere via System-Paketmanager (`apt install sqlite3`, `brew install sqlite3`, `winget install SQLite.SQLite`, etc.)
+- **sqlite3 CLI** *(optional)*: nur für manuelle DB-Inspektion. mneme nutzt intern Pythons `sqlite3`-Modul + `sqlite-vec` — kein externes Binary erforderlich.
 - **OS**: Windows, macOS, Linux
 - **Optional (LLM):** Für Kimi kein API-Key nötig (nutzt den Kimi CLI OAuth-Token). Für Claude Code einen `ollama`- oder `openai_compatible`-Provider setzen (Claude hat keinen Kimi-Token). In allen Fällen fällt AI-Strukturierung/Kompression graceful auf den **heuristic mode** zurück, wenn offline.
 
