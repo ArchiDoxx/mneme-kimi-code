@@ -29,7 +29,8 @@
 | 🧠 **Persistent Memory** | Kontext überlebt Sessions, Restarts und Reboots |
 | 🤖 **AI Structuring** | Rohe Tool-Outputs → strukturierte Beobachtungen (title, facts, narrative, concepts) via konfigurierbarem LLM (Kimi, Ollama, OpenAI-compatible) |
 | ⚡ **Heuristic Fallback** | Funktioniert ohne API-Key — regelbasierte Strukturierung, wenn Kimi nicht verfügbar ist |
-| 🔍 **Smart Search** | Volltext- (FTS5) + semantische (sqlite-vec) Hybridsuche über deine Projekt-Historie |
+| 🔍 **Smart Search** | Volltext-Suche (FTS5) immer aktiv; **semantische** Suche (sqlite-vec) optional — benötigt das `embeddings`-Extra ([Setup](#semantische-suche-embeddings)) |
+| 🗃️ **Auto-Backfill** | Beim Serverstart werden **bereits gespeicherte** Sessions automatisch & idempotent eingespeist (Kimi & Claude) — nicht nur neue |
 | 📊 **Progressive Disclosure** | 3-Schicht-Retrieval: index → timeline → full details (token-effizient) |
 | 🖥️ **Web Viewer** | Echtzeit-Memory-Stream unter `http://localhost:37777` |
 | 🔌 **AI-callable Tools** | `mneme_search`, `mneme_timeline`, `mneme_get` — die AI fragt ihr eigenes Memory ab (Kimi-Plugin-Tools bzw. Claude-MCP-Tools `mcp__mneme__…`) |
@@ -44,6 +45,24 @@
 | 📌 **Session Checkpoints** | Kontext nach Context-Compaction wiederherstellen (Kimi & Claude, via Pre/PostCompact-Hooks) |
 | 🔁 **Cross-Session Patterns** | Automatische Erkennung wiederkehrender Fehler, Fixes, Entscheidungen |
 | ✂️ **Truncation Tracking** | Protokolliert, wenn Tool-Outputs 100K Zeichen überschreiten |
+
+#### Semantische Suche (Embeddings)
+
+Die **Volltextsuche (FTS5)** funktioniert immer und ohne Zusatzpakete. Die
+**semantische** Suche (`/api/semantic_search`, `/api/vector_search`,
+`mneme search --semantic`) braucht echte Embeddings — installiere dafür das
+`embeddings`-Extra:
+
+```bash
+pip install 'mneme-kimi-code[embeddings]'     # bzw. beim Git/Source-Install mit [embeddings]
+```
+
+Ohne `sentence-transformers` fällt der Vektor-Store auf **deterministische
+Dummy-Embeddings** zurück: Aufrufe funktionieren, liefern aber keine semantisch
+sinnvollen Treffer. Außerdem operiert semantische Suche über die **KI-/heuristisch
+strukturierten** Beobachtungen — frisch per Auto-Backfill eingespeiste Historie
+wird nicht automatisch strukturiert; das holst du bei Bedarf mit `mneme structure`
+nach (heuristisch ohne API-Key, KI-gestützt mit API-Key).
 
 ---
 
@@ -92,6 +111,19 @@ mneme bootstrap                    # auto-detect
 ```
 
 Jedes Ziel bekommt seine **eigene, getrennte Memory-DB** — beide laufen mit **voller Feature-Parität, ohne Abstriche**. Details siehe [Host-CLI wählen](#host-cli-wählen-kimi-code-cli-oder-claude-code).
+
+**Beide Web-UIs gleichzeitig (verschiedene Ports):** Standardmäßig nutzen beide
+Ziele Port `37777`. Damit beide Server **parallel** laufen können, gib einem Ziel
+in seiner Config einen anderen Port — z. B. Kimi auf `37778`, Claude auf `37777`:
+
+```jsonc
+// ~/.kimi-code/mneme/config.json
+"server": { "port": 37778 }
+```
+
+Danach beide Ziele bootstrappen — Kimi-UI auf `http://localhost:37778`, Claude-UI
+auf `http://localhost:37777`. Jeder Server beobachtet nur die Sessions seines
+eigenen Ziels und speist dessen Historie beim Start automatisch ein.
 
 ---
 
