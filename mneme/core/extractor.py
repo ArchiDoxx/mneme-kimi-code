@@ -403,7 +403,7 @@ class Extractor:
 
         # Record truncation if applicable
         if success and original_size > 100000 and obs_id:
-            self.store.record_truncated_output(
+            self.store.truncated.record_truncated_output(
                 observation_id=obs_id,
                 original_size=original_size,
                 truncated_size=100000,
@@ -533,7 +533,7 @@ class Extractor:
                 signature = f"error:{tool}:{errors[0][:100]}"
                 pattern_hash = hashlib.sha256(signature.encode()).hexdigest()[:16]
 
-                self.store.add_or_update_pattern(
+                self.store.patterns.add_or_update_pattern(
                     pattern_type="error",
                     pattern_hash=pattern_hash,
                     title=f"Recurring error in {tool}",
@@ -563,7 +563,7 @@ class Extractor:
                     signature = f"fix:{fp}:{prev['error'][:100]}"
                     pattern_hash = hashlib.sha256(signature.encode()).hexdigest()[:16]
 
-                    self.store.add_or_update_pattern(
+                    self.store.patterns.add_or_update_pattern(
                         pattern_type="fix",
                         pattern_hash=pattern_hash,
                         title=f"Fix pattern for {fp}",
