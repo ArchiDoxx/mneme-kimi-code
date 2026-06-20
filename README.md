@@ -16,6 +16,71 @@
 
 ---
 
+### Who is this for?
+
+- Entwickler, die [Kimi Code CLI](https://moonshotai.github.io/kimi-cli/) **oder** [Claude Code](https://docs.claude.com/en/docs/claude-code) nutzen und persistentes Projekt-Memory wollen
+- Teams, die an komplexen Codebases über mehrere Sessions arbeiten
+- Nutzer, die zwischen beiden CLIs wechseln und je CLI eine eigene Memory-Historie wollen
+
+### Key Features
+
+| Feature | Description |
+|---------|-------------|
+| 🧠 **Persistent Memory** | Kontext überlebt Sessions, Restarts und Reboots |
+| 🤖 **AI Structuring** | Rohe Tool-Outputs → strukturierte Beobachtungen (title, facts, narrative, concepts) via konfigurierbarem LLM (Kimi, Ollama, OpenAI-compatible) |
+| ⚡ **Heuristic Fallback** | Funktioniert ohne API-Key — regelbasierte Strukturierung, wenn Kimi nicht verfügbar ist |
+| 🔍 **Smart Search** | Volltext- (FTS5) + semantische (sqlite-vec) Hybridsuche über deine Projekt-Historie |
+| 📊 **Progressive Disclosure** | 3-Schicht-Retrieval: index → timeline → full details (token-effizient) |
+| 🖥️ **Web Viewer** | Echtzeit-Memory-Stream unter `http://localhost:37777` |
+| 🔌 **AI-callable Tools** | `mneme_search`, `mneme_timeline`, `mneme_get` — die AI fragt ihr eigenes Memory ab (Kimi-Plugin-Tools bzw. Claude-MCP-Tools `mcp__mneme__…`) |
+| 🖇️ **MCP Server** | Claude Code, Claude Desktop, Cursor, Goose Integration — 15 Memory-Tools |
+| 📝 **PROJECT.md** | Auto-generierter Projekt-Kontext aus strukturierten Beobachtungen |
+| 🔒 **Privacy Tags** | 3-Schicht-Filter: System-Content entfernen → Sensitive redacten → Deep-Sanitize (vor jeder KI-Verarbeitung) |
+| 📊 **Knowledge Collections** | Kuratiere und query projektspezifische Wissens-Korpora |
+| 🌳 **Tree-sitter Analyzer** | AST-basierte Code-Erkundung (Python, JS, TS, Rust, Go) |
+| 💰 **Token Economics** | Token-Einsparungen und Read-Cost pro Beobachtung |
+| ⚡ **Zero Config** | Installieren und vergessen — funktioniert automatisch |
+| 📁 **Project Config** | Pro-Projekt `.mneme.json` für Custom Settings |
+| 📌 **Session Checkpoints** | Kontext nach Context-Compaction wiederherstellen (Kimi & Claude, via Pre/PostCompact-Hooks) |
+| 🔁 **Cross-Session Patterns** | Automatische Erkennung wiederkehrender Fehler, Fixes, Entscheidungen |
+| ✂️ **Truncation Tracking** | Protokolliert, wenn Tool-Outputs 100K Zeichen überschreiten |
+
+---
+
+### Installation
+
+> **Status:** Das Paket ist **noch nicht auf PyPI** veröffentlicht. Die Installation läuft direkt aus dem GitHub-Repo — ein einziger Befehl, **kein Clone nötig**.
+
+#### Empfohlen: `uv` (ein Befehl, global)
+
+```bash
+uv tool install git+https://github.com/ArchiDoxx/mneme-kimi-code.git
+mneme bootstrap --target claude     # oder: --target kimi   |   weglassen = auto-detect
+```
+
+Falls danach `mneme` als „command not found" gemeldet wird, liegt der uv-Bin-Ordner noch nicht im `PATH`:
+
+```bash
+uv tool update-shell                # fügt ~/.local/bin (Windows: %USERPROFILE%\.local\bin) zum PATH hinzu
+# danach ein NEUES Terminal öffnen, dann erneut: mneme bootstrap --target claude
+```
+
+Später updaten:
+
+```bash
+uv tool install git+https://github.com/ArchiDoxx/mneme-kimi-code.git --force
+```
+
+#### Alternative: `pip`
+
+```bash
+pip install git+https://github.com/ArchiDoxx/mneme-kimi-code.git
+mneme bootstrap --target claude
+```
+
+> `pip install --user` legt `mneme` unter `~/.local/bin` (Linux/macOS) bzw. `%APPDATA%\Python\Scripts` (Windows) ab — dieses Verzeichnis muss im `PATH` liegen.
+
+
 ## Dual-Target: Kimi Code CLI **und** Claude Code
 
 mneme läuft auf **beiden** CLIs gleichzeitig. `mneme bootstrap` erkennt das Ziel automatisch oder du wählst es explizit:
@@ -76,36 +141,6 @@ mneme-kimi-code ist so konzipiert, dass es **vollständig offline** funktioniert
 
 > **Privacy note:** Wenn AI-Strukturierung aktiviert ist, werden Tool-Outputs **nach** Anwendung einer 3-Schicht-Sanitisierung (System-Content entfernt, Secrets redacted, Privacy-Tags entfernt) an den konfigurierten LLM-Provider gesendet. Keine rohen Credentials, Tokens oder `<private>`-Blöcke verlassen deinen Rechner. Für 100% offline-Betrieb ohne Netzwerk-Calls kannst du **Ollama** oder einen anderen lokalen LLM verwenden.
 
-### Who is this for?
-
-- Entwickler, die [Kimi Code CLI](https://moonshotai.github.io/kimi-cli/) **oder** [Claude Code](https://docs.claude.com/en/docs/claude-code) nutzen und persistentes Projekt-Memory wollen
-- Teams, die an komplexen Codebases über mehrere Sessions arbeiten
-- Nutzer, die zwischen beiden CLIs wechseln und je CLI eine eigene Memory-Historie wollen
-
-### Key Features
-
-| Feature | Description |
-|---------|-------------|
-| 🧠 **Persistent Memory** | Kontext überlebt Sessions, Restarts und Reboots |
-| 🤖 **AI Structuring** | Rohe Tool-Outputs → strukturierte Beobachtungen (title, facts, narrative, concepts) via konfigurierbarem LLM (Kimi, Ollama, OpenAI-compatible) |
-| ⚡ **Heuristic Fallback** | Funktioniert ohne API-Key — regelbasierte Strukturierung, wenn Kimi nicht verfügbar ist |
-| 🔍 **Smart Search** | Volltext- (FTS5) + semantische (sqlite-vec) Hybridsuche über deine Projekt-Historie |
-| 📊 **Progressive Disclosure** | 3-Schicht-Retrieval: index → timeline → full details (token-effizient) |
-| 🖥️ **Web Viewer** | Echtzeit-Memory-Stream unter `http://localhost:37777` |
-| 🔌 **AI-callable Tools** | `mneme_search`, `mneme_timeline`, `mneme_get` — die AI fragt ihr eigenes Memory ab (Kimi-Plugin-Tools bzw. Claude-MCP-Tools `mcp__mneme__…`) |
-| 🖇️ **MCP Server** | Claude Code, Claude Desktop, Cursor, Goose Integration — 15 Memory-Tools |
-| 📝 **PROJECT.md** | Auto-generierter Projekt-Kontext aus strukturierten Beobachtungen |
-| 🔒 **Privacy Tags** | 3-Schicht-Filter: System-Content entfernen → Sensitive redacten → Deep-Sanitize (vor jeder KI-Verarbeitung) |
-| 📊 **Knowledge Collections** | Kuratiere und query projektspezifische Wissens-Korpora |
-| 🌳 **Tree-sitter Analyzer** | AST-basierte Code-Erkundung (Python, JS, TS, Rust, Go) |
-| 💰 **Token Economics** | Token-Einsparungen und Read-Cost pro Beobachtung |
-| ⚡ **Zero Config** | Installieren und vergessen — funktioniert automatisch |
-| 📁 **Project Config** | Pro-Projekt `.mneme.json` für Custom Settings |
-| 📌 **Session Checkpoints** | Kontext nach Context-Compaction wiederherstellen (Kimi & Claude, via Pre/PostCompact-Hooks) |
-| 🔁 **Cross-Session Patterns** | Automatische Erkennung wiederkehrender Fehler, Fixes, Entscheidungen |
-| ✂️ **Truncation Tracking** | Protokolliert, wenn Tool-Outputs 100K Zeichen überschreiten |
-
----
 
 ## Quick Start
 
@@ -116,40 +151,9 @@ mneme-kimi-code ist so konzipiert, dass es **vollständig offline** funktioniert
 - Mindestens eine Host-CLI: **[Kimi Code CLI](https://moonshotai.github.io/kimi-cli/)** oder **[Claude Code](https://docs.claude.com/en/docs/claude-code)**
 - *(optional)* **`sqlite3` CLI** — nur falls du die DB von Hand inspizieren willst. mneme selbst **braucht es nicht**: intern werden Pythons `sqlite3`-Modul + `sqlite-vec` verwendet, kein externes Binary.
 
-### Installation
+---
 
-> **Status:** Das Paket ist **noch nicht auf PyPI** veröffentlicht. Die Installation läuft direkt aus dem GitHub-Repo — ein einziger Befehl, **kein Clone nötig**.
-
-#### Empfohlen: `uv` (ein Befehl, global)
-
-```bash
-uv tool install git+https://github.com/ArchiDoxx/mneme-kimi-code.git
-mneme bootstrap --target claude     # oder: --target kimi   |   weglassen = auto-detect
-```
-
-Falls danach `mneme` als „command not found" gemeldet wird, liegt der uv-Bin-Ordner noch nicht im `PATH`:
-
-```bash
-uv tool update-shell                # fügt ~/.local/bin (Windows: %USERPROFILE%\.local\bin) zum PATH hinzu
-# danach ein NEUES Terminal öffnen, dann erneut: mneme bootstrap --target claude
-```
-
-Später updaten:
-
-```bash
-uv tool install git+https://github.com/ArchiDoxx/mneme-kimi-code.git --force
-```
-
-#### Alternative: `pip`
-
-```bash
-pip install git+https://github.com/ArchiDoxx/mneme-kimi-code.git
-mneme bootstrap --target claude
-```
-
-> `pip install --user` legt `mneme` unter `~/.local/bin` (Linux/macOS) bzw. `%APPDATA%\Python\Scripts` (Windows) ab — dieses Verzeichnis muss im `PATH` liegen.
-
-#### Aus lokalem Clone (für Entwicklung)
+#### Installation aus lokalem Clone (für Entwicklung)
 
 ```bash
 git clone https://github.com/ArchiDoxx/mneme-kimi-code.git
