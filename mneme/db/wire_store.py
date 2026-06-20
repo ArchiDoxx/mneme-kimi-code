@@ -382,12 +382,14 @@ class WireStore:
             prompt=prompt,
             created_at=created_at,
         )
-        # On the bulk backfill path (queue_structuring=False) skip the per-row
-        # vector write: it would add a second writer competing for the DB lock
-        # across thousands of historical rows, and backfilled rows are not
-        # AI-structured anyway. The live path keeps its original embedding
-        # behaviour so raw-observation vector search is unchanged.
-        obs_id = store.add_observation(obs, skip_vector=not queue_structuring)
+        # Wire/trace observations are intentionally NOT vector-embedded: semantic
+        # search runs over the AI-structured observations (structured_store), not
+        # raw trace rows — see this method's contract above. Skipping the per-row
+        # vector write also keeps both the live path and the bulk backfill from
+        # adding a second writer that contends for the DB lock under concurrency
+        # (embedding every raw row otherwise stalls ingestion when the live
+        # watcher, structuring worker and backfill all hit the DB at once).
+        obs_id = store.add_observation(obs, skip_vector=True)
 
         # Queue for background structuring
         if obs_id and queue_structuring:
