@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from typing import Any
 
 from loguru import logger
 
 from mneme.core.sanitize import clean_observation, extract_file_path
 from mneme.db.store import Observation, ObservationStore, PendingMessage
+
+# SessionStart hooks block the Claude Code UI until they return, so the session
+# bookkeeping write must be bounded. A short per-attempt busy_timeout with a few
+# bounded retries caps the worst-case wait (~2.3s) instead of the default 30s,
+# degrading gracefully if another writer (e.g. the structuring worker) holds the
+# lock — far better than freezing the UI for 30s.
+_SESSION_START_DB_TIMEOUT = 0.5
+_SESSION_START_DB_ATTEMPTS = 4
 
 
 class Extractor:
@@ -29,7 +38,15 @@ class Extractor:
         session_id = data["session_id"]
         cwd = data["cwd"]
 
-        self.store.add_session(session_id, cwd)
+        try:
+            self.store.add_session(
+                session_id,
+                cwd,
+                timeout=_SESSION_START_DB_TIMEOUT,
+                attempts=_SESSION_START_DB_ATTEMPTS,
+            )
+        except sqlite3.OperationalError as exc:
+            logger.warning(f"add_session skipped (db busy at session start): {exc}")
         logger.info(f"Session started: {session_id}")
 
         # Check if this is a resumed session — inject checkpoint context

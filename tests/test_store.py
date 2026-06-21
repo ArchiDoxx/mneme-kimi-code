@@ -127,3 +127,34 @@ class TestObservationStore:
         stats = store.get_stats()
         assert stats["total_sessions"] == 1
         assert stats["total_observations"] == 0
+
+
+def test_get_connection_honors_timeout_param(temp_db):
+    """busy_timeout must be derived from the timeout arg, not hardcoded to 30s."""
+    from mneme.db.schema import get_connection
+
+    conn = get_connection(temp_db, timeout=2.0)
+    try:
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 2000
+    finally:
+        conn.close()
+
+    default_conn = get_connection(temp_db)
+    try:
+        assert default_conn.execute("PRAGMA busy_timeout").fetchone()[0] == 30000
+    finally:
+        default_conn.close()
+
+
+def test_add_session_short_timeout_is_idempotent(temp_db):
+    """The bounded SessionStart write path still creates exactly one row."""
+    store = ObservationStore(db_path=temp_db)
+
+    store.add_session("sess_fast", "/tmp/proj", timeout=0.5, attempts=4)
+    store.add_session("sess_fast", "/tmp/proj", timeout=0.5, attempts=4)
+
+    conn = store._get_conn()
+    count = conn.execute(
+        "SELECT COUNT(*) FROM sessions WHERE id = ?", ("sess_fast",)
+    ).fetchone()[0]
+    assert count == 1
