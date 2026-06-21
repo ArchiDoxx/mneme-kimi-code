@@ -601,7 +601,7 @@ def get_connection(db_path: str | Path, timeout: float = 30.0) -> sqlite3.Connec
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")
-    conn.execute("PRAGMA busy_timeout = 30000")  # 30 seconds
+    conn.execute(f"PRAGMA busy_timeout = {int(timeout * 1000)}")  # derived from the timeout arg
     return conn
 
 

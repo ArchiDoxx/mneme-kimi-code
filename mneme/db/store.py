@@ -91,16 +91,51 @@ class ObservationStore:
     # Sessions
     # -----------------------------------------------------------------------
 
-    def add_session(self, session_id: str, cwd: str) -> None:
-        """Create a new session record."""
+    def add_session(
+        self,
+        session_id: str,
+        cwd: str,
+        *,
+        timeout: float | None = None,
+        attempts: int = 1,
+    ) -> None:
+        """Create a new session record.
+
+        ``timeout`` (seconds), when given, opens a dedicated connection with a
+        short ``busy_timeout`` instead of reusing the thread-local 30s one. This
+        keeps a UI-blocking caller — the SessionStart hook, which blocks Claude
+        Code until it returns — from freezing for the full default busy_timeout
+        when another writer (e.g. the structuring worker) holds the lock. The
+        idempotent ``INSERT OR IGNORE`` is retried up to ``attempts`` times via
+        ``retry_on_locked``; if it still cannot acquire the lock it raises, so the
+        caller can degrade gracefully.
+        """
         import os
 
         project = os.path.basename(cwd.rstrip("/\\"))
-        with self._get_conn() as conn:
-            conn.execute(
-                "INSERT OR IGNORE INTO sessions (id, cwd, project) VALUES (?, ?, ?)",
-                (session_id, cwd, project),
-            )
+
+        if timeout is None:
+            with self._get_conn() as conn:
+                conn.execute(
+                    "INSERT OR IGNORE INTO sessions (id, cwd, project) VALUES (?, ?, ?)",
+                    (session_id, cwd, project),
+                )
+            logger.debug(f"Session created: {session_id}")
+            return
+
+        conn = get_connection(self.db_path, timeout=timeout)
+
+        def _insert() -> None:
+            with conn:
+                conn.execute(
+                    "INSERT OR IGNORE INTO sessions (id, cwd, project) VALUES (?, ?, ?)",
+                    (session_id, cwd, project),
+                )
+
+        try:
+            retry_on_locked(_insert, attempts=attempts, delay=0.1)
+        finally:
+            conn.close()
         logger.debug(f"Session created: {session_id}")
 
     def end_session(self, session_id: str, reason: str) -> None:
