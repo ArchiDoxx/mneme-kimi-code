@@ -7,7 +7,7 @@ import threading
 from typing import Any
 
 from mneme.config import load_config
-from mneme.db.schema import get_connection
+from mneme.db.schema import get_connection, retry_on_locked
 from mneme.wire.models import (
     ContentPartEvent,
     SessionState,
@@ -36,17 +36,21 @@ class WireStore:
 
     def ensure_session(self, session_id: str, cwd: str = "") -> None:
         """Create session record if missing. Preserves existing cwd."""
-        with self._get_conn() as conn:
-            conn.execute(
-                """
-                INSERT INTO sessions (id, cwd, project)
-                VALUES (?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    cwd = COALESCE(sessions.cwd, excluded.cwd),
-                    project = COALESCE(sessions.project, excluded.project)
-                """,
-                (session_id, cwd, cwd),
-            )
+
+        def _run() -> None:
+            with self._get_conn() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO sessions (id, cwd, project)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        cwd = COALESCE(sessions.cwd, excluded.cwd),
+                        project = COALESCE(sessions.project, excluded.project)
+                    """,
+                    (session_id, cwd, cwd),
+                )
+
+        retry_on_locked(_run)
 
     def get_session_cwd(self, session_id: str) -> str | None:
         """Get cwd for a session from the database."""
@@ -61,25 +65,48 @@ class WireStore:
     # Wire events
     # ------------------------------------------------------------------
 
-    def add_wire_event(self, event: WireEvent) -> int:
-        """Store a raw wire event. Skips duplicates via INSERT OR IGNORE."""
+    def add_wire_event(self, event: WireEvent) -> bool:
+        """Store a raw wire event, deduped via INSERT OR IGNORE.
+
+        Returns ``True`` if a new row was inserted, ``False`` if this exact event
+        (same session_id, timestamp, event_type) was already stored. Callers use
+        this to derive observations only once per wire event.
+        """
+
+        def _run() -> bool:
+            with self._get_conn() as conn:
+                cursor = conn.execute(
+                    """
+                    INSERT OR IGNORE INTO wire_events
+                    (session_id, timestamp, event_type, step_number, turn_number, payload_json)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event.session_id,
+                        event.timestamp,
+                        event.event_type,
+                        getattr(event, "step_number", None),
+                        getattr(event, "turn_number", None),
+                        json.dumps(event.payload, ensure_ascii=False),
+                    ),
+                )
+                return cursor.rowcount == 1
+
+        return retry_on_locked(_run)
+
+    def session_has_wire_events(self, session_id: str) -> bool:
+        """True if any wire events are already indexed for this session.
+
+        Used by the Claude backfill as an idempotency guard: a session that is
+        already present (live-watched or previously backfilled) is skipped so
+        re-runs do not create duplicate observations.
+        """
         with self._get_conn() as conn:
-            cursor = conn.execute(
-                """
-                INSERT OR IGNORE INTO wire_events
-                (session_id, timestamp, event_type, step_number, turn_number, payload_json)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    event.session_id,
-                    event.timestamp,
-                    event.event_type,
-                    getattr(event, "step_number", None),
-                    getattr(event, "turn_number", None),
-                    json.dumps(event.payload, ensure_ascii=False),
-                ),
-            )
-            return cursor.lastrowid or 0
+            row = conn.execute(
+                "SELECT 1 FROM wire_events WHERE session_id = ? LIMIT 1",
+                (session_id,),
+            ).fetchone()
+        return row is not None
 
     def get_wire_events(
         self,
@@ -324,10 +351,13 @@ class WireStore:
         turn_number: int | None = None,
         timestamp: float | None = None,
         cwd: str | None = None,
+        queue_structuring: bool = True,
     ) -> int:
         """Add an observation record compatible with the old schema.
 
-        Also queues it for background AI structuring via pending_messages.
+        Queues it for background AI structuring via pending_messages unless
+        ``queue_structuring`` is False (the bulk backfill disables this so it does
+        not flood the live structuring queue with thousands of old observations).
         Skips vector embedding for performance — wire events are indexed
         in bulk and vector search is secondary for trace data.
         """
@@ -352,10 +382,17 @@ class WireStore:
             prompt=prompt,
             created_at=created_at,
         )
-        obs_id = store.add_observation(obs, skip_vector=False)
+        # Wire/trace observations are intentionally NOT vector-embedded: semantic
+        # search runs over the AI-structured observations (structured_store), not
+        # raw trace rows — see this method's contract above. Skipping the per-row
+        # vector write also keeps both the live path and the bulk backfill from
+        # adding a second writer that contends for the DB lock under concurrency
+        # (embedding every raw row otherwise stalls ingestion when the live
+        # watcher, structuring worker and backfill all hit the DB at once).
+        obs_id = store.add_observation(obs, skip_vector=True)
 
         # Queue for background structuring
-        if obs_id:
+        if obs_id and queue_structuring:
             self.add_pending_message(
                 session_id=session_id,
                 message_type="observation",

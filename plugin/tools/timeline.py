@@ -13,7 +13,7 @@ from mneme.compat import fix_windows_encoding
 
 fix_windows_encoding()
 
-from mneme.db.store import ObservationStore
+from mneme.core.query import SearchService
 
 
 def main() -> None:
@@ -24,27 +24,7 @@ def main() -> None:
         observation_id = params.get("observation_id", 0)
         radius = min(params.get("radius", 5), 20)
 
-        store = ObservationStore()
-        timeline = store.get_timeline(observation_id, radius)
-
-        # Format compact output
-        def format_obs(obs: dict) -> dict:
-            return {
-                "id": obs["id"],
-                "timestamp": obs["created_at"],
-                "type": obs["event_type"],
-                "tool_name": obs.get("tool_name"),
-                "file_path": obs.get("file_path"),
-                "snippet": (obs.get("tool_output") or obs.get("error") or obs.get("prompt") or "")[
-                    :200
-                ],
-            }
-
-        output = {
-            "center": format_obs(timeline["center"]) if timeline["center"] else None,
-            "before": [format_obs(o) for o in timeline["before"]],
-            "after": [format_obs(o) for o in timeline["after"]],
-        }
+        output = SearchService().timeline_raw(observation_id, radius)
 
         print(json.dumps(output, ensure_ascii=False, indent=2))
 

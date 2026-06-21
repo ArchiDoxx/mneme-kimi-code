@@ -135,10 +135,10 @@ class Injector:
         """Get patterns relevant to the current project."""
         try:
             # Get patterns for this project
-            project_patterns = self.store.get_patterns_for_project(cwd, limit=5)
+            project_patterns = self.store.patterns.get_patterns_for_project(cwd, limit=5)
 
             # Also get high-occurrence global patterns
-            global_patterns = self.store.find_patterns(
+            global_patterns = self.store.patterns.find_patterns(
                 min_occurrences=2,
                 limit=5,
             )

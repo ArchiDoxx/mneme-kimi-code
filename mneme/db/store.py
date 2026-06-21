@@ -13,7 +13,9 @@ from typing import Any
 from loguru import logger
 
 from mneme.config import load_config
-from mneme.db.schema import get_connection
+from mneme.db.pattern_store import PatternStore
+from mneme.db.schema import get_connection, retry_on_locked
+from mneme.db.truncated_store import TruncatedOutputStore
 from mneme.db.vector import SQLiteVecStore
 
 
@@ -66,6 +68,10 @@ class ObservationStore:
         self.sqlite_vec = SQLiteVecStore(db_path=self.db_path)
         self._ensure_db()
         self._local = threading.local()
+        # Focused sub-stores for self-contained table-domains, sharing this
+        # store's database. Access via store.patterns / store.truncated.
+        self.patterns = PatternStore(db_path=self.db_path)
+        self.truncated = TruncatedOutputStore(db_path=self.db_path)
 
     def _ensure_db(self) -> None:
         """Ensure database exists."""
@@ -115,55 +121,58 @@ class ObservationStore:
         content = self._observation_to_text(observation)
         content_hash = self._hash_content(content) if content else None
 
-        with self._get_conn() as conn:
-            # Use provided created_at or default to CURRENT_TIMESTAMP
-            created_at = observation.created_at
-            if created_at:
-                cursor = conn.execute(
-                    """
-                    INSERT INTO observations
-                    (session_id, event_type, tool_name, tool_input, tool_output,
-                     error, file_path, prompt, agent_name, content_hash, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT DO NOTHING
-                    """,
-                    (
-                        observation.session_id,
-                        observation.event_type,
-                        observation.tool_name,
-                        observation.tool_input,
-                        observation.tool_output,
-                        observation.error,
-                        observation.file_path,
-                        observation.prompt,
-                        observation.agent_name,
-                        content_hash,
-                        created_at,
-                    ),
-                )
-            else:
-                cursor = conn.execute(
-                    """
-                    INSERT INTO observations
-                    (session_id, event_type, tool_name, tool_input, tool_output,
-                     error, file_path, prompt, agent_name, content_hash)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT DO NOTHING
-                    """,
-                    (
-                        observation.session_id,
-                        observation.event_type,
-                        observation.tool_name,
-                        observation.tool_input,
-                        observation.tool_output,
-                        observation.error,
-                        observation.file_path,
-                        observation.prompt,
-                        observation.agent_name,
-                        content_hash,
-                    ),
-                )
-            obs_id = cursor.lastrowid
+        def _insert() -> int | None:
+            with self._get_conn() as conn:
+                # Use provided created_at or default to CURRENT_TIMESTAMP
+                created_at = observation.created_at
+                if created_at:
+                    cursor = conn.execute(
+                        """
+                        INSERT INTO observations
+                        (session_id, event_type, tool_name, tool_input, tool_output,
+                         error, file_path, prompt, agent_name, content_hash, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT DO NOTHING
+                        """,
+                        (
+                            observation.session_id,
+                            observation.event_type,
+                            observation.tool_name,
+                            observation.tool_input,
+                            observation.tool_output,
+                            observation.error,
+                            observation.file_path,
+                            observation.prompt,
+                            observation.agent_name,
+                            content_hash,
+                            created_at,
+                        ),
+                    )
+                else:
+                    cursor = conn.execute(
+                        """
+                        INSERT INTO observations
+                        (session_id, event_type, tool_name, tool_input, tool_output,
+                         error, file_path, prompt, agent_name, content_hash)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT DO NOTHING
+                        """,
+                        (
+                            observation.session_id,
+                            observation.event_type,
+                            observation.tool_name,
+                            observation.tool_input,
+                            observation.tool_output,
+                            observation.error,
+                            observation.file_path,
+                            observation.prompt,
+                            observation.agent_name,
+                            content_hash,
+                        ),
+                    )
+                return cursor.lastrowid
+
+        obs_id = retry_on_locked(_insert)
 
         if obs_id and not skip_vector:
             # Add to sqlite-vec for semantic search
@@ -1053,171 +1062,3 @@ class ObservationStore:
             "observations_preserved": max(0, total_obs - total_dropped),
             "total_observations": total_obs,
         }
-
-    # -----------------------------------------------------------------------
-    # Patterns (cross-session)
-    # -----------------------------------------------------------------------
-
-    def add_or_update_pattern(
-        self,
-        pattern_type: str,
-        pattern_hash: str,
-        title: str,
-        description: str,
-        session_id: str | None = None,
-        related_files: list[str] | None = None,
-        related_observation_ids: list[int] | None = None,
-    ) -> int:
-        """Add a new pattern or update existing one."""
-        with self._get_conn() as conn:
-            # Try to update existing
-            existing = conn.execute(
-                "SELECT id, occurrence_count FROM patterns WHERE pattern_hash = ?",
-                (pattern_hash,),
-            ).fetchone()
-
-            if existing:
-                conn.execute(
-                    """
-                    UPDATE patterns
-                    SET occurrence_count = occurrence_count + 1,
-                        last_seen_session_id = ?,
-                        updated_at = CURRENT_TIMESTAMP,
-                        description = CASE WHEN LENGTH(?) > LENGTH(description) THEN ? ELSE description END
-                    WHERE id = ?
-                    """,
-                    (session_id, description, description, existing["id"]),
-                )
-                logger.debug(f"Pattern updated: {pattern_hash}")
-                return existing["id"]
-
-            # Insert new
-            cursor = conn.execute(
-                """
-                INSERT INTO patterns
-                (pattern_type, pattern_hash, title, description,
-                 first_seen_session_id, last_seen_session_id,
-                 related_files, related_observation_ids)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    pattern_type,
-                    pattern_hash,
-                    title,
-                    description,
-                    session_id,
-                    session_id,
-                    json.dumps(related_files or []),
-                    json.dumps(related_observation_ids or []),
-                ),
-            )
-            pattern_id = cursor.lastrowid
-
-        logger.info(f"New pattern added: {title}")
-        return pattern_id or 0
-
-    def find_patterns(
-        self,
-        pattern_type: str | None = None,
-        query: str | None = None,
-        min_occurrences: int = 1,
-        limit: int = 20,
-    ) -> list[dict[str, Any]]:
-        """Find patterns matching criteria."""
-        with self._get_conn() as conn:
-            sql = "SELECT * FROM patterns WHERE occurrence_count >= ?"
-            params: list[Any] = [min_occurrences]
-
-            if pattern_type:
-                sql += " AND pattern_type = ?"
-                params.append(pattern_type)
-
-            if query:
-                sql += " AND (title LIKE ? OR description LIKE ?)"
-                params.extend([f"%{query}%", f"%{query}%"])
-
-            sql += " ORDER BY occurrence_count DESC, updated_at DESC LIMIT ?"
-            params.append(limit)
-
-            rows = conn.execute(sql, params).fetchall()
-
-        results = []
-        for row in rows:
-            r = dict(row)
-            r["related_files"] = json.loads(r.get("related_files") or "[]")
-            r["related_observation_ids"] = json.loads(r.get("related_observation_ids") or "[]")
-            results.append(r)
-        return results
-
-    def get_patterns_for_project(self, cwd: str, limit: int = 10) -> list[dict[str, Any]]:
-        """Get patterns relevant to current project."""
-        import os
-
-        project_name = os.path.basename(cwd.rstrip("/\\"))
-
-        with self._get_conn() as conn:
-            rows = conn.execute(
-                """
-                SELECT * FROM patterns
-                WHERE related_files LIKE ? OR title LIKE ? OR description LIKE ?
-                ORDER BY occurrence_count DESC, updated_at DESC
-                LIMIT ?
-                """,
-                (f"%{project_name}%", f"%{project_name}%", f"%{project_name}%", limit),
-            ).fetchall()
-
-        results = []
-        for row in rows:
-            r = dict(row)
-            r["related_files"] = json.loads(r.get("related_files") or "[]")
-            r["related_observation_ids"] = json.loads(r.get("related_observation_ids") or "[]")
-            results.append(r)
-        return results
-
-    # -----------------------------------------------------------------------
-    # Truncated outputs
-    # -----------------------------------------------------------------------
-
-    def record_truncated_output(
-        self,
-        observation_id: int,
-        original_size: int,
-        truncated_size: int,
-        summary: str | None = None,
-        head_preview: str | None = None,
-        tail_preview: str | None = None,
-        line_count: int | None = None,
-    ) -> int:
-        """Record that a tool output was truncated."""
-        with self._get_conn() as conn:
-            cursor = conn.execute(
-                """
-                INSERT INTO truncated_outputs
-                (observation_id, original_size, truncated_size, summary,
-                 head_preview, tail_preview, line_count)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    observation_id,
-                    original_size,
-                    truncated_size,
-                    summary,
-                    head_preview,
-                    tail_preview,
-                    line_count,
-                ),
-            )
-            record_id = cursor.lastrowid
-
-        logger.debug(f"Truncated output recorded for observation {observation_id}")
-        return record_id or 0
-
-    def get_truncated_output(self, observation_id: int) -> dict[str, Any] | None:
-        """Get truncation record for an observation."""
-        with self._get_conn() as conn:
-            row = conn.execute(
-                "SELECT * FROM truncated_outputs WHERE observation_id = ?",
-                (observation_id,),
-            ).fetchone()
-
-        return dict(row) if row else None
