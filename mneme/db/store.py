@@ -14,7 +14,7 @@ from loguru import logger
 
 from mneme.config import load_config
 from mneme.db.pattern_store import PatternStore
-from mneme.db.schema import get_connection, retry_on_locked
+from mneme.db.schema import get_connection, retry_on_locked, write_transaction
 from mneme.db.truncated_store import TruncatedOutputStore
 from mneme.db.vector import SQLiteVecStore
 
@@ -649,7 +649,7 @@ class ObservationStore:
         self, limit: int = 10, message_type: str | None = None
     ) -> list[dict[str, Any]]:
         """Claim pending messages for processing (self-healing)."""
-        with self._get_conn() as conn:
+        with write_transaction(self._get_conn()) as conn:
             sql = """
                 SELECT * FROM pending_messages
                 WHERE status = 'pending'
@@ -680,7 +680,7 @@ class ObservationStore:
 
     def mark_message_processed(self, message_id: int) -> None:
         """Mark a message as processed."""
-        with self._get_conn() as conn:
+        with write_transaction(self._get_conn()) as conn:
             conn.execute(
                 """
                 UPDATE pending_messages
@@ -693,7 +693,7 @@ class ObservationStore:
 
     def mark_message_failed(self, message_id: int) -> None:
         """Mark a message as failed."""
-        with self._get_conn() as conn:
+        with write_transaction(self._get_conn()) as conn:
             conn.execute(
                 """
                 UPDATE pending_messages

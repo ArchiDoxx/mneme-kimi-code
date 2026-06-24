@@ -3,14 +3,47 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TypeVar
 
 from loguru import logger
 
 _T = TypeVar("_T")
+
+# ---------------------------------------------------------------------------
+# Process-wide write serialization
+# ---------------------------------------------------------------------------
+
+# SQLite allows only a single writer at a time. Even in WAL mode, when several
+# in-process connections (live wire-watcher, startup backfill, structuring
+# worker) try to upgrade to a write lock at the same moment, SQLite returns
+# SQLITE_BUSY immediately for the losing writer — a snapshot/upgrade conflict the
+# busy_timeout handler does NOT cover. Under load that degrades into a livelock
+# where the backfill and structuring worker starve and never make progress.
+# Serializing every in-process write through one re-entrant lock removes the
+# race: within this process there is never more than one writer, so the
+# write-write conflict cannot occur. Reads (WAL snapshots) are unaffected and
+# stay fully concurrent.
+_WRITE_LOCK = threading.RLock()
+
+
+@contextmanager
+def write_transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
+    """Serialize a (possibly multi-statement) write transaction.
+
+    Holds the process-wide write lock for the duration of the transaction and
+    commits on exit (rolls back on exception), so multi-statement writes such as
+    claim-then-update or delete-then-insert commit atomically and never interleave
+    with another in-process writer. Use for any write that is not already routed
+    through :func:`retry_on_locked`.
+    """
+    with _WRITE_LOCK:
+        with conn:
+            yield conn
 
 # ---------------------------------------------------------------------------
 # Migration system
@@ -622,7 +655,8 @@ def retry_on_locked(fn: Callable[[], _T], *, attempts: int = 8, delay: float = 0
     """
     for attempt in range(attempts):
         try:
-            return fn()
+            with _WRITE_LOCK:
+                return fn()
         except sqlite3.OperationalError as exc:
             msg = str(exc).lower()
             transient = "locked" in msg or "busy" in msg

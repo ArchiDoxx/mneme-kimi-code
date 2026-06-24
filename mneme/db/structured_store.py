@@ -12,7 +12,7 @@ from loguru import logger
 
 from mneme.config import load_config
 from mneme.core.prompts.json_parser import ParsedObservation
-from mneme.db.schema import get_connection
+from mneme.db.schema import get_connection, write_transaction
 
 
 class StructuredObservationStore:
@@ -61,86 +61,89 @@ class StructuredObservationStore:
         """
         content_hash = self._compute_hash(session_id, obs.title, obs.narrative)
 
-        conn = self._get_conn()
-        cursor = conn.execute(
-            """
-            INSERT INTO structured_observations
-            (session_id, project, type, title, subtitle, facts, narrative,
-             concepts, files_read, files_modified, content_hash,
-             raw_observation_id, source, model)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(session_id, content_hash) DO NOTHING
-            RETURNING id
-            """,
-            (
-                session_id,
-                project,
-                obs.type,
-                obs.title,
-                obs.subtitle,
-                json.dumps(obs.facts, ensure_ascii=False),
-                obs.narrative,
-                json.dumps(obs.concepts, ensure_ascii=False),
-                json.dumps(obs.files_read, ensure_ascii=False),
-                json.dumps(obs.files_modified, ensure_ascii=False),
-                content_hash,
-                raw_observation_id,
-                source,
-                model,
-            ),
-        )
-        row = cursor.fetchone()
-        obs_id = row[0] if row else None
+        # Serialize the whole insert + vector-embed + dedup-link sequence through
+        # the process-wide write lock so it cannot interleave with the live
+        # wire-watcher or backfill writers (the vector store shares this conn).
+        with write_transaction(self._get_conn()) as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO structured_observations
+                (session_id, project, type, title, subtitle, facts, narrative,
+                 concepts, files_read, files_modified, content_hash,
+                 raw_observation_id, source, model)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_id, content_hash) DO NOTHING
+                RETURNING id
+                """,
+                (
+                    session_id,
+                    project,
+                    obs.type,
+                    obs.title,
+                    obs.subtitle,
+                    json.dumps(obs.facts, ensure_ascii=False),
+                    obs.narrative,
+                    json.dumps(obs.concepts, ensure_ascii=False),
+                    json.dumps(obs.files_read, ensure_ascii=False),
+                    json.dumps(obs.files_modified, ensure_ascii=False),
+                    content_hash,
+                    raw_observation_id,
+                    source,
+                    model,
+                ),
+            )
+            row = cursor.fetchone()
+            obs_id = row[0] if row else None
 
-        if obs_id:
-            logger.debug(f"Structured observation added: {obs_id} ({obs.type})")
-            # Add field-level vector embeddings (sqlite-vec)
-            try:
-                from mneme.db.vector import SQLiteVecStore
+            if obs_id:
+                logger.debug(f"Structured observation added: {obs_id} ({obs.type})")
+                # Add field-level vector embeddings (sqlite-vec)
+                try:
+                    from mneme.db.vector import SQLiteVecStore
 
-                vec_store = SQLiteVecStore(db_path=self.db_path)
-                # Share connection to avoid "database is locked"
-                vec_store.set_conn(conn)
-                vec_store.add_structured_fields(
-                    structured_id=obs_id,
-                    session_id=session_id,
-                    project=project,
-                    title=obs.title,
-                    narrative=obs.narrative,
-                    facts=obs.facts,
-                )
-            except Exception:
-                pass  # Vector store is best-effort
+                    vec_store = SQLiteVecStore(db_path=self.db_path)
+                    # Share connection to avoid "database is locked"
+                    vec_store.set_conn(conn)
+                    vec_store.add_structured_fields(
+                        structured_id=obs_id,
+                        session_id=session_id,
+                        project=project,
+                        title=obs.title,
+                        narrative=obs.narrative,
+                        facts=obs.facts,
+                    )
+                except Exception:
+                    pass  # Vector store is best-effort
 
-            # Schedule PROJECT.md update
-            try:
-                from mneme.core.project_md import get_project_md_generator
+                # Schedule PROJECT.md update
+                try:
+                    from mneme.core.project_md import get_project_md_generator
 
-                get_project_md_generator().schedule_update(project)
-            except Exception:
-                pass  # PROJECT.md is best-effort
-        else:
-            # Dedup v2: Create soft link to existing observation
-            existing = conn.execute(
-                "SELECT id FROM structured_observations WHERE session_id = ? AND content_hash = ?",
-                (session_id, content_hash),
-            ).fetchone()
-
-            if existing:
-                existing_id = existing[0]
-                conn.execute(
-                    """
-                    INSERT INTO structured_observation_links
-                    (existing_structured_id, linked_raw_observation_id, linked_session_id, content_hash, link_type)
-                    VALUES (?, ?, ?, ?, 'dedup')
-                    """,
-                    (existing_id, raw_observation_id, session_id, content_hash),
-                )
-                logger.debug(
-                    f"Soft dedup link created: raw_obs={raw_observation_id} -> structured={existing_id}"
-                )
+                    get_project_md_generator().schedule_update(project)
+                except Exception:
+                    pass  # PROJECT.md is best-effort
             else:
-                logger.debug(f"Structured observation deduplicated (hash: {content_hash})")
+                # Dedup v2: Create soft link to existing observation
+                existing = conn.execute(
+                    "SELECT id FROM structured_observations WHERE session_id = ? AND content_hash = ?",
+                    (session_id, content_hash),
+                ).fetchone()
+
+                if existing:
+                    existing_id = existing[0]
+                    conn.execute(
+                        """
+                        INSERT INTO structured_observation_links
+                        (existing_structured_id, linked_raw_observation_id, linked_session_id, content_hash, link_type)
+                        VALUES (?, ?, ?, ?, 'dedup')
+                        """,
+                        (existing_id, raw_observation_id, session_id, content_hash),
+                    )
+                    logger.debug(
+                        f"Soft dedup link created: raw_obs={raw_observation_id} -> structured={existing_id}"
+                    )
+                else:
+                    logger.debug(f"Structured observation deduplicated (hash: {content_hash})")
 
         return obs_id or 0
 

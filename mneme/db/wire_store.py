@@ -7,7 +7,7 @@ import threading
 from typing import Any
 
 from mneme.config import load_config
-from mneme.db.schema import get_connection, retry_on_locked
+from mneme.db.schema import get_connection, retry_on_locked, write_transaction
 from mneme.wire.models import (
     ContentPartEvent,
     SessionState,
@@ -275,7 +275,7 @@ class WireStore:
 
     def sync_todos(self, state: SessionState) -> None:
         """Replace todos for a session with latest from state.json."""
-        with self._get_conn() as conn:
+        with write_transaction(self._get_conn()) as conn:
             conn.execute("DELETE FROM session_todos WHERE session_id = ?", (state.session_id,))
             for i, todo in enumerate(state.todos):
                 conn.execute(
